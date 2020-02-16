@@ -1,0 +1,253 @@
+---
+title: "post_DADA2_filtering"
+author: "Nathan R. Geraldi"
+date: "March 21, 2019"
+output: github_document
+---
+
+set table options
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## libraries
+```{r libraries, message=FALSE, warning=FALSE}
+library(RColorBrewer)
+library(rdrop2)  # what is this used for?
+library(vegan)
+library(fields)
+library(psych)
+library(tidyverse) 
+library(broom)
+library(metacoder)
+
+#  install.packages("devtools")
+#  devtools::install_github("grunwaldlab/metacoder")
+
+```
+
+## functions
+```{r functions, message=FALSE, warning=FALSE}
+# function to remove rows with n number of NA's
+delete.na <- function(DF, n=0) {
+  DF[rowSums(is.na(DF)) <= n,]
+}
+
+# Specify alpha as a percentage:
+colorRampAlpha <- function(..., n, alpha) {
+   colors <- colorRampPalette(...)(n)
+   paste(colors, sprintf("%x", ceiling(255*alpha)), sep="")
+}
+
+```
+
+
+## define universal variables
+```{r define_universal}
+stud_pat<-"Dammam"  # matches study specific title from pipe (begining of files).
+dir<-"/Users/geraldn/Dropbox/"
+out_file<-"Documents/KAUST/eDNA/R/pipe_summary"
+# export  to project folder
+export_file<-"Documents/KAUST/eDNA/R/csv/"
+# plot export file
+plot_file<-"Documents/KAUST/eDNA/R/plots/Dammam_core"
+#  name of data
+dat_name<-paste(stud_pat,"_filtered_data_all.csv",sep="")  
+# name for dating info
+dating_name<-paste(stud_pat,"_predicted_dating.csv",sep="")
+
+
+## set some other universal variables
+####  !!!! need to be in alphabetical order - tabs in sam_file should match these names too !!!!! also have "type"" column
+primers<-c('18s_stoeck','18smini',"euka02","co1", "rbclmini","vert")
+n_primers<-length(primers)
+## must be in alphabedtica order
+minboots<-c("insect",50,70,90)  # for getting all data minboots and insect data
+min_insect_score<-0.80# set minimum score for insect taxa score
+
+####  !!!! set minimum reads per sample to remove beforre mds   !!!!!   ####
+min_reads_per_miseq<- 1000
+
+################### set file path and name of sample data
+## each primer should have own sheet with name matching primers
+## primer sheets first then location sheet (1 row per each sample location), then other sheets with relevent data
+sam_file_path<-"/Users/geraldn/Dropbox/Documents/KAUST/eDNA/Samples_Data/Dammam/Dammam_sample_data_all.xlsx" ## set sample data file
+##
+
+```
+
+## import data
+
+```{r import}
+# sample data -- will need Quality control !!! make sure sample_se make sense
+sheets <- openxlsx::getSheetNames(sam_file_path)
+sam_dat <- lapply(sheets,openxlsx::read.xlsx,xlsxFile=sam_file_path)  # mes1<-sam_dat[[2]]   names(mes1)
+names(sam_dat) <- sheets   # add name to each list
+##    move to next .Rmd - nothing to do her
+locations<-sam_dat[[n_primers+1]]  # isolate locations
+sample_dat<-sam_dat[[n_primers+2]]  # isolate other data
+sample_age<-sam_dat[[n_primers+3]]  # isolate other age
+##
+sam_dat <-sam_dat[1:n_primers]   # keep only primer smaple data
+sam_dat <- lapply(sam_dat, function(df) mutate_at(df, .vars="sample_ID", as.character))  # make sure sample_ID is character
+sample_sam<-bind_rows(sam_dat, .id = 'id')  # names(sam_dat[1:6]) 
+
+# predicted dates
+dates_pred<-data.table::fread(file=paste(dir,export_file,dating_name,sep=""),sep=",")
+   # hist(dates_pred$pred[dates_pred$pred<10])
+
+#  import taxonomy assigned to sequences    names(dat)
+dat<-data.table::fread(file=paste(dir,export_file,dat_name, sep=""), sep=",")
+    
+```
+
+## basic_tidy
+
+```{r tiding}
+  hab_catc<-c("seagrass 1","seagrass 2", "mangrove 1", "mangrove 2","seagrass 3","seagrass 4","mangrove 3", "mangrove 4", "mangrove 5","seagrass 5","seagrass 6")
+hab_cat_lev<-c("seagrass 1","seagrass 2","seagrass 3","seagrass 4","seagrass 5","seagrass 6", "mangrove 1", "mangrove 2","mangrove 3", "mangrove 4", "mangrove 5")
+
+  loc1<- locations %>% # names(loc1)
+    rename_all(tolower) %>% 
+    arrange(-lat) %>% 
+    mutate(core_id_pub=1:length(row.names(locations))) %>% 
+    mutate(hab_cat=factor(hab_catc,levels=hab_cat_lev)) %>% 
+    select(core,habitat, lat,lon,area,direction.loc)
+  
+##  sample data
+sample_age1<- sample_age %>% 
+  rename_all(tolower) %>% 
+  filter(complete.cases(dating_type)) %>% 
+  left_join(loc1)   # names(loc1)
+  #mutate(habitat=factor(habitat), core_id_pub=factor(core_id_pub),      dating_type=factor(dating_type,levels=c("pb","c14")))
+
+## predicted dates
+dates_pred2 <- dates_pred %>%  
+  select(id_dash, core, pred)
+
+# make simple sample names
+sample_names_good <- dat %>%    #   names(dat)
+  filter(!duplicated(sample_id_u))  %>% 
+  select(sample_id_u) %>% 
+  mutate(num=1:length(row.names(.)), sample_id_meta=paste("x_",num,sep="")) %>% 
+  select(-num)
+
+###      tidy sequence data
+ # unique(sample_age1$dating_type)
+dat2<- dat %>%   # names(dat)   names(dates_pred)
+  filter(reads>0) %>% 
+  left_join(dates_pred2) %>%   ## names(dates_pred)
+  left_join(loc1) %>%   ## names(loc1)
+  dplyr::rename(ybp = pred) %>% 
+  mutate(estimated_year=2016-ybp) %>% 
+  mutate(type_3cat=forcats::fct_recode(type, "blank"="extraction blank", "blank" = "pcr blank", "mock" = "positive control")) %>% 
+  mutate(ybp_cat=cut(ybp, breaks=c(-Inf,10,50,100,200,500, Inf), 
+                        labels=c("<10","10-50","50-100","100-200","200-500",">500"))) %>%  
+  mutate(ybp_cat=as.character(ybp_cat), type_3cat=as.character(type_3cat)) %>% 
+  mutate(ybp_cat_blanks=if_else(is.na(ybp_cat), type_3cat  , ybp_cat )) %>% # bring blanks into age cat
+    # unique(dat2$ybp_cat_blanks)
+  mutate(ybp_cat_blanks=factor(ybp_cat_blanks, levels=c("<10","10-50","50-100","100-200","200-500",">500", "sample", "blank","mock"))) %>%
+  mutate(direction.loc=factor(direction.loc, levels=c("North","Mid-north","Mid-south","South"))) %>% 
+  mutate(percent_reads=reads/sample_sum_after_filt*100)  %>% 
+  mutate(log_reads=log(reads+1), log_rare_reads=log(rare_reads+1), log_percent_reads=log(percent_reads+1) )  %>% 
+  ## remove samples with minimal reads   !!!!!!!!!!!!!!!!!!!!!!!!!
+  filter(sample_sum_after_filt>min_reads_per_miseq) %>% 
+  ## limit to specific miseq /  minboot data      unique(dat2$primer_taxassign_id)
+  filter(primer_taxassign_id== "co1;insect" | primer_taxassign_id== "18s_stoeck;70" | primer_taxassign_id=="18smini;70" | primer_taxassign_id=="euka02;70" |primer_taxassign_id=="rbclmini;70" |primer_taxassign_id=="vert;70" ) %>% 
+  ## get new/good sample names
+  left_join(sample_names_good)
+            
+
+```
+
+## meta_tidy
+
+```{r meta_tidy}
+# lineage names
+tl<-c("Superkingdom","Phylum", "Class", "Order", "Family", "Genus", "Species")
+
+## sv table needs to be lineage in rows, then sample_id as column names    names(dat2)
+sv<- dat2 %>%   # names(sv)      head(dat2$lineage)  dat2$lineage[1:100]
+  filter(primer!="rbclmini") %>% 
+  select(lineage, reads, sample_id_meta) %>% 
+  spread(key=sample_id_meta, value= reads, fill = 0) %>% 
+  tidyr::separate(lineage, into=tl, sep=";" , remove=TRUE) %>% 
+  mutate_if(is.character, list(~na_if(., "NA"))) %>% # convert NA to tru NA
+  mutate(Superkingdom="Eukaryota")   # fix in future, insect kingdom
+
+  ####  make sure all taxa and samples have info
+  c_start_sample<-8  # first column of sample data  !! TO DO, just use numeric columns
+tr<-c(c_start_sample:length(names(sv)))  # sample data columns    names(sv)
+dr<-c(1:(c_start_sample-1))  # lineage columna
+#
+mes_sv<-sv[which(rowSums(sv[,tr])>0),]  # remove taxa (rows) with no reads
+sv2<-mes_sv[,which(colSums(mes_sv[,tr])>0)]  # remove samples (columns) with no reads
+  #    names(mes1)  names(sv2)  8 to 315  setdiff(names(sv) , names(sv2))
+## sample data for making trees - sample_id colun first, must match column names in sv table
+tr<-c(c_start_sample:length(names(sv2))) 
+sample <- dat2 %>%    #names(dat2)
+   select(primer_taxassign_id:type,reads_per_sample_dada:log_percent_reads,sample_id_meta) %>%
+  mutate(primer_name=forcats::fct_recode(primer, "18S_V7"="euka02", "18S_V9"="18smini", "18S_V4"="18s_stoeck","CO1"="co1", "Vert"="vert")) %>% 
+  mutate(primer_name=factor(primer_name,levels=c("18S_V9","18S_V7","18S_V4","CO1","Vert"))) %>% 
+  filter(!duplicated(sample_id_meta))  %>% 
+    filter(sample_id_meta %in% names(sv2[,tr])) %>%  # match up with previous
+  ## final filter, can't have NA's for comparisons
+    filter(type=="sample") %>% 
+    filter(complete.cases(habitat))
+
+levels(sample$primer_name)
+
+```
+
+## limit data to metazons
+
+```{r metazoand}
+## make pattern for filtering
+pat<-c("Annelida","Arthropoda","Chordata","Cnidaria","Ctenophora","Echinodermata","Gastrotricha","Mollusca","Nematoda","Orthonectida","Platyhelminthes","Porifera","Rotifera","Sipuncula","Tardigrada","Urochordata","Chaetognatha","Craniata","Nemertea","Bryozoa","Hemichordata","Brachiopoda","Entoprocta","Cephalochordata","Entoprocta","Gnathostomulida", "Xenacoelomorpha") 
+pat<-paste(pat, collapse = "|")
+
+x<- sv2 %>% 
+  filter(grepl(pat, Phylum))  # 137 taxa, 412 for all
+####  make sure all taxa and samples have info
+  c_start_sample<-8  # first column of sample data  !! TO DO, just use numeric columns
+tr<-c(c_start_sample:length(names(x)))  # sample data columns    names(sv)
+dr<-c(1:(c_start_sample-1))  # lineage columna
+mes_x<-x[which(rowSums(x[,tr])>0),]  # remove taxa (rows) with no reads
+x2<-mes_x[,which(colSums(mes_x[,tr])>0)]  # remove samples (columns) with no reads
+## match samples
+tr<-c(c_start_sample:length(names(x2))) 
+x_sample <- sample %>%    #names(dat2)
+    filter(sample_id_meta %in% names(x2[,tr])) 
+### resave with new name!!!!
+sv_metaz<-x2
+sample_metaz<-x_sample
+
+#  unique(sv$Phylum)
+```
+
+
+##limt datat o 18s primers
+
+```{r 18s}
+
+```
+
+
+
+## metacod_run_all
+
+
+## save_plot
+```{r save_plot}
+ggsave(file=paste(dir,plot_file,"/core_dating.tiff",sep=""), width = 15, height = 20, units = "cm", dpi="print")
+
+
+```
+
+## export_data
+```{r save_data}
+
+data.table::fwrite(edna_slice,paste(dir,export_file,export_name,sep=""),row.names=F, sep=",")
+
+```
+

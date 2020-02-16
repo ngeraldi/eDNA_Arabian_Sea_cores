@@ -1,0 +1,277 @@
+---
+title: "post_DADA2_filtering"
+author: "Nathan R. Geraldi"
+date: "March 21, 2019"
+output: github_document
+---
+
+set table options
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## libraries
+```{r libraries, message=FALSE, warning=FALSE}
+library(RColorBrewer)
+library(rdrop2)  # what is this used for?
+library(vegan)
+library(fields)
+library(psych)
+library(tidyverse) 
+library(broom)
+```
+
+## functions
+```{r functions, message=FALSE, warning=FALSE}
+# function to remove rows with n number of NA's
+delete.na <- function(DF, n=0) {
+  DF[rowSums(is.na(DF)) <= n,]
+}
+```
+
+
+## define universal variables
+```{r define_universal}
+stud_pat<-"Dammam"  # matches study specific title from pipe (begining of files).
+dir<-"/Users/geraldn/Dropbox/"
+out_file<-"Documents/KAUST/eDNA/R/pipe_summary"
+# export  to project folder
+export_file<-"Documents/KAUST/eDNA/R/csv/"
+# plot export file
+plot_file<-"Documents/KAUST/eDNA/R/plots/Dammam_core"
+#  name of data
+dat_name<-paste(stud_pat,"_filtered_data_all.csv",sep="")  
+# name for dating info
+dating_name<-paste(stud_pat,"_predicted_dating.csv",sep="")
+
+
+## set some other universal variables
+####  !!!! need to be in alphabetical order - tabs in sam_file should match these names too !!!!! also have "type"" column
+primers<-c('18s_stoeck','18smini',"euka02","co1", "rbclmini","vert")
+n_primers<-length(primers)
+## must be in alphabedtica order
+minboots<-c("insect",50,70,90)  # for getting all data minboots and insect data
+min_insect_score<-0.80# set minimum score for insect taxa score
+
+####  !!!! set minimum reads per sample to remove beforre mds   !!!!!   ####
+min_reads_per_miseq<- 1000
+
+################### set file path and name of sample data
+## each primer should have own sheet with name matching primers
+## primer sheets first then location sheet (1 row per each sample location), then other sheets with relevent data
+sam_file_path<-"/Users/geraldn/Dropbox/Documents/KAUST/eDNA/Samples_Data/Dammam/Dammam_sample_data_all.xlsx" ## set sample data file
+##
+
+```
+
+## import data
+
+```{r import}
+# sample data -- will need Quality control !!! make sure sample_se make sense
+sheets <- openxlsx::getSheetNames(sam_file_path)
+sam_dat <- lapply(sheets,openxlsx::read.xlsx,xlsxFile=sam_file_path)  # mes1<-sam_dat[[2]]   names(mes1)
+names(sam_dat) <- sheets   # add name to each list
+##    move to next .Rmd - nothing to do her
+locations<-sam_dat[[n_primers+1]]  # isolate locations
+sample_dat<-sam_dat[[n_primers+2]]  # isolate other data
+sample_age<-sam_dat[[n_primers+3]]  # isolate other age
+##
+sam_dat <-sam_dat[1:n_primers]   # keep only primer smaple data
+sam_dat <- lapply(sam_dat, function(df) mutate_at(df, .vars="sample_ID", as.character))  # make sure sample_ID is character
+sample_sam<-bind_rows(sam_dat, .id = 'id')  # names(sam_dat[1:6]) 
+
+# predicted dates
+dates_pred<-data.table::fread(file=paste(dir,export_file,dating_name,sep=""),sep=",")
+   # hist(dates_pred$pred[dates_pred$pred<10])
+#  import taxonomy assigned to sequences    names(dat)
+dat<-data.table::fread(file=paste(dir,export_file,dat_name,sep=""), sep=",")
+    
+```
+
+## tidy
+
+```{r tiding}
+  hab_catc<-c("seagrass 1","seagrass 2", "mangrove 1", "mangrove 2","seagrass 3","seagrass 4","mangrove 3", "mangrove 4", "mangrove 5","seagrass 5","seagrass 6")
+hab_cat_lev<-c("seagrass 1","seagrass 2","seagrass 3","seagrass 4","seagrass 5","seagrass 6", "mangrove 1", "mangrove 2","mangrove 3", "mangrove 4", "mangrove 5")
+
+  loc1<- locations %>% # names(loc1)
+    rename_all(tolower) %>% 
+    arrange(-lat) %>% 
+    mutate(core_id_pub=1:length(row.names(locations))) %>% 
+    mutate(hab_cat=factor(hab_catc,levels=hab_cat_lev)) %>% 
+    select(core,habitat, lat,lon,area,direction.loc)
+  
+##  tidy sample data
+#sample_age1<- sample_age %>% 
+#  rename_all(tolower) %>% 
+#  filter(complete.cases(dating_type)) %>% 
+#  left_join(loc1) %>%   # names(loc1)
+#  mutate(habitat=factor(habitat), core_id_pub=factor(core_id_pub),        dating_type=factor(dating_type,levels=c("pb","c14")))
+
+dates_pred2 <- dates_pred %>%  
+  select(id_dash, core, pred)
+
+###      tidy sequence data
+ # unique(sample_age1$dating_type)
+dat2<- dat %>%   # names(dat)   names(dates_pred)
+  #filter(reads>0) %>% 
+  left_join(dates_pred2) %>%   ## names(dates_pred)
+  left_join(loc1) %>%   ## names(loc1)
+  dplyr::rename(ybp = pred) %>% 
+  mutate(estimated_year=2016-ybp) %>% 
+  mutate(type_3cat=forcats::fct_recode(type, "blank"="extraction blank", "blank" = "pcr blank", "mock" = "positive control")) %>% 
+  mutate(ybp_cat=cut(ybp, breaks=c(-Inf,10,50,100,200,500, Inf), 
+                        labels=c("<10","10-50","50-100","100-200","200-500",">500"))) %>%  
+  mutate(ybp_cat=as.character(ybp_cat), type_3cat=as.character(type_3cat)) %>% 
+  mutate(ybp_cat_blanks=if_else(is.na(ybp_cat), type_3cat  , ybp_cat )) %>% # bring blanks into age cat
+    # unique(dat2$ybp_cat_blanks)
+  mutate(ybp_cat_blanks=factor(ybp_cat_blanks, levels=c("<10","10-50","50-100","100-200","200-500",">500", "sample", "blank","mock"))) %>%
+  mutate(direction.loc=factor(direction.loc, levels=c("North","Mid-north","Mid-south","South"))) %>% 
+  mutate(percent_reads=reads/sample_sum_after_filt*100)  %>% 
+  mutate(log_reads=log(reads+1), log_rare_reads=log(rare_reads+1), log_percent_reads=log(percent_reads+1) )  %>% 
+  ## remove samples with minimal reads   !!!!!!!!!!!!!!!!!!!!!!!!!
+  filter(sample_sum_after_filt>min_reads_per_miseq)
+            
+mes<-dat2 %>% 
+  filter(type=="sample") %>% 
+  select(sample_id_u,sample_sum_after_filt) %>% 
+  filter(!duplicated(sample_id_u))
+hist(mes$sample_sum_after_filt[mes$sample_sum_after_filt<100000000])
+#mes<-dat2 %>%      
+#  filter(!duplicated(id_dash)) 
+#  barplot(dplyr::count(mes, ybp_cat))
+
+```
+
+
+## MDS_prep
+
+```{r MDS_prep}
+#####     spread so each sample row, first x columns are taxa
+##   then split by differnt reads transformations
+# names(dat2)   names(dat3)
+#  unique(dat3$read_transf_type)  # check order after running first 4 lines of dat3
+names_list_dat3<-c("reads","rare_reads","percent_reads")
+
+dat3<- dat2 %>%  #  mes<-dat2  mes<-dat3[[1]] names(mes)  names(mes[,1:50])
+  select(lineage:type,sample_id_u,ybp,type_3cat,ybp_cat_blanks,core,habitat,lat,lon,area,direction.loc, rare_reads, percent_reads) %>% 
+  gather(key="read_transf_type", value="abundance", reads, rare_reads, percent_reads )  %>% #gather differnt read abundances into abundance
+  #nest(read_transf_type)
+  group_split(read_transf_type) %>% 
+  set_names(names_list_dat3)
+    #unique(dat3$read_transf_type)
+
+#####       begin getting distacne matrix
+# set functoin
+   fn<-19 ## first column of taxa - check dat4 lines then related mes
+
+   mds_dist_fun<- function(df)
+     vegan::metaMDS(df[,c(fn:length(colnames(df)))], distance = "bray")
+
+   
+# split or nest by read_transf_type  then spread then dist matrix.
+dat4<-dat3 %>%    #  mes<-dat4[[1]]   names(mes[,1:50])
+  purrr::map(~ .x %>%  spread(key=lineage, value=abundance,  fill=0)) 
+dat5<-dat4 %>% ## need second to get row names, improve later 
+  purrr::map(~ .x %>% mds_dist_fun )
+
+# extract and tidy data fro plots
+
+x<-dat5[[1]]
+x2<-dat4[[1]]
+MDS_xy <- data.frame(x$points)
+MDS_xy <-bind_cols(MDS_xy, x2[, c(1:fn-1)])
+
+#####   !!!!   TODO  !!!!   ####
+## map through to add data to list
+purrr::map(dat3, c(1:fn))  # extract columns 1 to fn from all df in list
+
+#  save workspace
+ save.image(file = paste(dir,"Documents/KAUST/eDNA/R/workspace/",'Dammam_mds.RData', sep="")  )
+
+## fix any names
+ MDS_xy <- MDS_xy %>% 
+     mutate(primer=forcats::fct_recode(primer, "18S_V7"="euka02", "18S_V9"="18smini", "18S_V4"="18s_stoeck","CO1"="co1", "Vert"="vert", "RBCL"="rbclmini")) %>% 
+  mutate(primer=factor(primer,levels=c("18S_V9","18S_V7","18S_V4","CO1","Vert","RBCL")))
+ 
+```
+
+## Important - because double standardize, differences in total reads is removed -use reads not rarefied or %
+
+## MDS out-put, 
+# for reads- no convergence,  sqrt trans, wisconsin double stand 
+# for rarified reads- no convergence,  sqrt trans, wisconsin double stand
+# for percent reads- no convergence,  sqrt trans, wisconsin double stand
+
+
+## MDS_plot
+
+```{r MDS_plot}
+###   all
+ggplot(MDS_xy, aes(MDS1, MDS2, color = primer, size=type , shape=minboot)) + geom_point() + theme_bw()  +
+  scale_colour_brewer(palette = "Set1") +
+  scale_shape(solid=FALSE) +
+  theme_minimal()
+
+ggsave(file=paste(dir,plot_file,"/MDS/mds_all.tiff",sep=""), width = 20, height = 20, units = "cm", dpi="print")
+
+###   18s  minboot70
+MDS_xy2 <- MDS_xy %>% 
+    filter(minboot=="70" ) %>%  # "co1;insect"
+    filter(type =="sample") %>% 
+    filter(grepl("18S",primer))  # keep only 18s primers
+
+ggplot(MDS_xy2, aes(MDS1, MDS2, color = primer, shape=habitat, size=ybp)) + geom_point() + theme_bw()  +
+  scale_colour_brewer(palette = "Set1") +
+  scale_shape(solid=FALSE) +
+  theme_minimal()
+
+ggsave(file=paste(dir,plot_file,"/MDS/mds_18s.tiff",sep=""), width = 20, height = 20, units = "cm", dpi="print")
+
+###  co1       names(MDS_xy)
+MDS_xy2 <- MDS_xy %>% 
+      # filter(primer_taxassign_id== "co1;insect" | minboot=="70" ) %>% 
+     filter(primer_taxassign_id  == "co1;70") %>% 
+    filter(type=="sample") %>% 
+    filter(primer=="CO1")
+
+ggplot(MDS_xy2, aes(MDS1, MDS2, color = ybp_cat_blanks , shape= habitat, size=ybp)) + geom_point() + theme_bw()  +
+  # xlim(1.5,2.5) + ylim(-5,-3.5) + 
+  scale_colour_brewer(palette = "Set1") +
+  scale_shape(solid=FALSE) +
+  theme_minimal()
+
+ggsave(file=paste(dir,plot_file,"/MDS/mds_CO1.tiff",sep=""), width = 20, height = 20, units = "cm", dpi="print")
+
+###  6 plots by primers names(MDS_xy)
+MDS_xy2 <- MDS_xy %>% 
+       filter(minboot=="70" ) %>% 
+       filter(type=="sample") %>% 
+      mutate(core=as.character(core))
+
+ggplot(MDS_xy2, aes(MDS1, MDS2, color = ybp_cat_blanks , shape= habitat, size=ybp)) + geom_point() + theme_bw()  +
+  
+  facet_wrap(facets=vars(primer), nrow=3, drop=TRUE, scales="free", dir="v", shrink=FALSE) +
+  
+  scale_colour_brewer(palette = "Set1") +
+  scale_shape(solid=FALSE) +
+  theme_minimal()
+
+ggsave(file=paste(dir,plot_file,"/MDS/mds_primer_6_plot.tiff",sep=""), width = 20, height = 25, units = "cm", dpi="print")
+
+```
+##  plot notes
+1. log of reads, 4 groups, 18s co1 insect, all vert, dada co1, and dada 18
+2. no clear effect of habitat, although rbclmini and 18smini yes
+3. effect of ybp, <50 then >50 goruped, except for rbcl-mixed, co1 somewhat continuous change
+4. no clear effect of core
+
+
+
+## export_data
+```{r save_data}
+
+data.table::fwrite(edna_slice,paste(dir,export_file,export_name,sep=""),row.names=F, sep=",")
+
+```
+

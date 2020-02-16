@@ -1,0 +1,239 @@
+---
+title: "post_DADA2_filtering"
+author: "Nathan R. Geraldi"
+date: "March 21, 2019"
+output: github_document
+---
+
+set table options
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## libraries
+```{r libraries, message=FALSE, warning=FALSE}
+library(RColorBrewer)
+library(rdrop2)  # what is this used for?
+library(vegan)
+library(fields)
+library(psych)
+library(tidyverse) 
+library(broom)
+library("sf")
+#library("rgeos")
+library("rnaturalearth")
+library("rnaturalearthdata")
+library("grid")
+# define map
+world <- ne_countries(scale='medium',returnclass = 'sf') # 
+me <- ne_countries(scale='large', continent = 'asia', returnclass = 'sf') #  unique(world$region_wb)   unique(world$continent)
+```
+
+## functions
+```{r functions, message=FALSE, warning=FALSE}
+# function to remove rows with n number of NA's
+delete.na <- function(DF, n=0) {
+  DF[rowSums(is.na(DF)) <= n,]
+}
+```
+
+
+## define universal variables
+```{r define_universal}
+stud_pat<-"Dammam"  # matches study specific title from pipe (begining of files).
+dir<-"/Users/geraldn/Dropbox/"
+out_file<-"Documents/KAUST/eDNA/R/pipe_summary"
+# export  to project folder
+export_file<-"Documents/KAUST/eDNA/R/csv/"
+# plot export file
+plot_file<-"Documents/KAUST/eDNA/R/plots/Dammam_core"
+
+# name for csv that you will save at very end
+export_name<-paste(stud_pat,"_predicted_dating.csv",sep="")
+
+
+## set some other universal variables
+####  !!!! need to be in alphabetical order - tabs in sam_file should match these names too !!!!! also have "type"" column
+primers<-c('18s_stoeck','18smini',"euka02","co1", "rbclmini","vert")
+n_primers<-length(primers)
+## must be in alphabedtica order
+minboots<-c("insect",50,70,90)  # for getting all data minboots and insect data
+min_insect_score<-0.80# set minimum score for insect taxa score
+
+################### set file path and name of sample data
+## each primer should have own sheet with name matching primers
+## primer sheets first then location sheet (1 row per each sample location), then other sheets with relevent data
+sam_file_path<-"/Users/geraldn/Dropbox/Documents/KAUST/eDNA/Samples_Data/Dammam/Dammam_sample_data_all.xlsx" ## set sample data file
+##
+
+```
+
+## import data
+
+```{r import}
+# sample data -- will need Quality control !!! make sure sample_se make sense
+sheets <- openxlsx::getSheetNames(sam_file_path)
+sam_dat <- lapply(sheets,openxlsx::read.xlsx,xlsxFile=sam_file_path)  # mes1<-sam_dat[[2]]   names(mes1)
+names(sam_dat) <- sheets   # add name to each list
+##    move to next .Rmd - nothing to do her
+locations<-sam_dat[[n_primers+1]]  # isolate locations  names(locations)
+sample_dat<-sam_dat[[n_primers+2]]  # isolate other data
+sample_age<-sam_dat[[n_primers+3]]  # isolate other age
+##
+sam_dat <-sam_dat[1:n_primers]   # keep only primer smaple data
+sam_dat <- lapply(sam_dat, function(df) mutate_at(df, .vars="sample_ID", as.character))  # make sure sample_ID is character
+sample_sam<-bind_rows(sam_dat, .id = 'id')  # names(sam_dat[1:6]) 
+
+#  import taxonomy assigned to sequences  
+dat<-data.table::fread(file=paste(dir,export_file,export_name,sep=""), sep=",")
+    
+```
+
+## tidy
+
+```{r tiding}
+# set variables for new names
+hab_catc<-c("seagrass 1","seagrass 2", "mangrove 1", "mangrove 2","seagrass 3","seagrass 4","mangrove 3", "mangrove 4", "mangrove 5","seagrass 5","seagrass 6")
+hab_cat_lev<-c("seagrass 1","seagrass 2","seagrass 3","seagrass 4","seagrass 5","seagrass 6", "mangrove 1", "mangrove 2","mangrove 3", "mangrove 4", "mangrove 5")
+
+# get needed info from locations - data fro each core
+  loc1<- locations %>% # names(locations)
+    rename_all(tolower) %>% 
+    arrange(-lat) %>% 
+    mutate(core_id_pub=1:length(row.names(locations))) %>% 
+    mutate(hab_cat=factor(hab_catc,levels=hab_cat_lev))
+  
+# eDNA slices
+  edna_slice <- sample_sam %>% 
+    rename_all(tolower) %>% 
+    filter(!duplicated(id_dash)) %>% 
+    filter(type=="sample") %>% 
+    filter(id=="18s_stoeck") %>% 
+    select(id_dash,sample_id) %>% 
+    separate(id_dash, into=c("core", "depth.cm"), sep="-" ,remove=FALSE, convert=TRUE) %>% 
+    left_join(loc1[,c(1,2,23)])
+    
+sample_age1<- sample_age %>% 
+  rename_all(tolower) %>% 
+  filter(complete.cases(dating_type)) %>% 
+  left_join(loc1[,c(1,2,13,22,23)]) %>% 
+  mutate(habitat=factor(habitat), core_id_pub=factor(core_id_pub), dating_type=factor(dating_type,levels=c("pb","c14","Linear correction")))
+ # unique(sample_age1$dating_type)
+
+```
+
+
+## plot
+```{r plot}
+
+hc<-c("seagreen", "tan4")
+
+
+(sa <- ggplot(data = me) +
+     geom_sf(fill = "antiquewhite1") +
+      geom_point(data = loc1, aes(x = lon, y = lat, color= habitat, shape= habitat), size = 4) +
+        scale_color_manual(values=c("tan3","seagreen3")) +
+    scale_shape(solid=FALSE) +
+     annotate(geom = "text", x = 50, y = 28.5 , label = "Arabian Gulf", color = "grey22", size = 4) +
+     annotate(geom = "text", x = 49, y = 26 , label = "Saudia Arabia", color = "grey22", size = 4) + 
+   annotate(geom = "text", x = 51.2, y = 25.1 , label = "Qatar", color = "grey22", size = 4) +
+   annotate(geom = "text", x = 51.2, y = 29.6 , label = "Iran", color = "grey22", size = 4) +
+    
+    annotate(geom = "text", x = 49.1, y = 28 , label = "North", color = "grey22", size = 3) +
+    annotate(geom = "text", x = 50.1, y = 27.3 , label = "Mid-north", color = "grey22", size = 3) +
+    annotate(geom = "text", x = 50.5, y = 26.8 , label = "Mid-south", color = "grey22", size = 3) +
+    annotate(geom = "text", x = 50.55, y = 25.7 , label = "South", color = "grey22", size = 3) +
+    
+     coord_sf(xlim = c(48, 52), ylim = c(24.5, 30)) +
+     xlab("Longitude")+ ylab("Latitude")+
+    ggspatial::annotation_scale(location = "bl", width_hint = 0.5) +
+    theme(legend.position="bottom") +
+     theme(panel.grid.major = element_line(colour = gray(0.2), linetype = "dashed", 
+         size = 0.5), panel.background = element_rect(fill = "aliceblue"), 
+         panel.border = element_rect(fill = NA)))
+
+
+(Nor <- ggplot(data = me) +
+     geom_sf(fill = "antiquewhite1") +
+     geom_point(data = loc1, aes(x = lon, y = lat, color= habitat, shape= habitat), size = 5) +
+    scale_color_manual(values=c("tan3","seagreen3")) +
+    scale_shape(solid=FALSE) +
+    geom_text(data=loc1, aes(lon, lat, label=core_id_pub),hjust=.5, vjust=.5) +
+     coord_sf(xlim = c(48.7, 48.85), ylim = c(27.9, 28.05), expand = FALSE) + 
+     annotate("text", x = 48.72, y = 28.04, label= "North", size = 3) + 
+    ggspatial::annotation_scale(location = "bl", width_hint = 0.5) +
+     theme_void() + 
+     theme(panel.grid.major = element_line(colour="transparent"), panel.grid.minor = element_line(colour="transparent"), panel.background = element_rect(fill = "aliceblue") )  )
+
+loc2<-loc1 %>% 
+  filter(direction.loc=="Mid-north")
+
+(Mnor <- ggplot(data = me) +
+     geom_sf(fill = "antiquewhite1") +
+     geom_point(data = loc1, aes(x = lon, y = lat, color= habitat, shape= habitat), size = 5) +
+    scale_color_manual(values=c("tan3","seagreen3")) +
+    scale_shape(solid=FALSE) +
+    #geom_text(data=loc1, aes(lon, lat, label=core_id_pub),hjust=.5, vjust=.5) +
+    ggrepel::geom_text_repel(data=loc2, aes(lon, lat, label=core_id_pub)) +
+     coord_sf(xlim = c(49.5, 49.7), ylim = c(27.2, 27.4), expand = FALSE) + 
+     annotate("text", x = 49.53, y = 27.39, label= "Mid-north", size = 3) + 
+    ggspatial::annotation_scale(location = "bl", width_hint = 0.5) +
+     theme_void() + 
+      theme(panel.grid.major = element_line(colour="transparent"), panel.grid.minor = element_line(colour="transparent"), panel.background = element_rect(fill = "aliceblue") )  )
+
+
+loc2<-loc1 %>% 
+  filter(direction.loc=="Mid-south")
+
+(Msou <- ggplot(data = me) +
+     geom_sf(fill = "antiquewhite1") +
+     geom_point(data = loc1, aes(x = lon, y = lat, color= habitat, shape= habitat), size = 5) +
+    scale_color_manual(values=c("tan3","seagreen3")) +
+    scale_shape(solid=FALSE) +
+    #geom_text(data=loc1, aes(lon, lat, label=core_id_pub),hjust=.5, vjust=.5) +
+    ggrepel::geom_text_repel(data=loc2, aes(lon, lat, label=core_id_pub)) +
+     coord_sf(xlim = c(49.9, 50.2), ylim = c(26.5, 26.8), expand = FALSE) + 
+     annotate("text", x = 49.96, y = 26.79, label= "Mid-south", size = 3) + 
+    ggspatial::annotation_scale(location = "bl", width_hint = 0.5) +
+     theme_void() + 
+       theme(panel.grid.major = element_line(colour="transparent"), panel.grid.minor = element_line(colour="transparent"), panel.background = element_rect(fill = "aliceblue") )  )
+
+loc2<-loc1 %>% 
+  filter(direction.loc=="South")
+
+(Sou <- ggplot(data = me) +
+     geom_sf(fill = "antiquewhite1") +
+     geom_point(data = loc1, aes(x = lon, y = lat, color= habitat, shape= habitat), size = 5) +
+    scale_color_manual(values=c("tan3","seagreen3")) +
+    scale_shape(solid=FALSE) +
+    #geom_text(data=loc1, aes(lon, lat, label=core_id_pub),hjust=.5, vjust=.5) +
+    ggrepel::geom_text_repel(data=loc2, aes(lon, lat, label=core_id_pub)) +
+     coord_sf(xlim = c(50.1, 50.3), ylim = c(25.6, 25.8), expand = FALSE) + 
+     annotate("text", x = 50.12, y = 25.79, label= "South", size = 3) + 
+    ggspatial::annotation_scale(location = "bl", width_hint = 0.5) +
+     theme_void() + 
+       theme(panel.grid.major = element_line(colour="transparent"), panel.grid.minor = element_line(colour="transparent"), panel.background = element_rect(fill = "aliceblue") )  )
+  ## combine
+
+
+ggpubr::ggarrange(sa,          
+  # Second row with box and dot plots
+  ggpubr::ggarrange(Nor + theme(legend.position="none",panel.grid.major = element_line(colour="transparent"), panel.grid.minor = element_line(colour="transparent"), panel.background = element_rect(fill = "aliceblue") ), 
+                    Mnor + theme(legend.position="none",panel.grid.major = element_line(colour="transparent"), panel.grid.minor = element_line(colour="transparent"), panel.background = element_rect(fill = "aliceblue") ),
+                    Msou + theme(legend.position="none",panel.grid.major = element_line(colour="transparent"), panel.grid.minor = element_line(colour="transparent"), panel.background = element_rect(fill = "aliceblue") ),
+                    Sou + theme(legend.position="none",panel.grid.major = element_line(colour="transparent"), panel.grid.minor = element_line(colour="transparent"), panel.background = element_rect(fill = "aliceblue") ),
+                    ncol = 2, nrow=2, align = "v"), 
+  nrow = 1, ncol=2) 
+
+
+# 
+
+```
+
+## save_plot
+```{r save_plot}
+ggsave(file=paste(dir,plot_file,"/map.tiff",sep=""), width = 18, height = 15, units = "cm", dpi="print")
+
+
+```
+

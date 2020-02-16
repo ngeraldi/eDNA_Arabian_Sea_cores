@@ -1,0 +1,492 @@
+---
+title: "post_DADA2_filtering"
+author: "Nathan R. Geraldi"
+date: "March 21, 2019"
+output: github_document
+---
+
+set table options
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## libraries
+```{r libraries, message=FALSE, warning=FALSE}
+library(RColorBrewer)
+library(rdrop2)  # what is this used for?
+library(vegan)
+library(fields)
+library(psych)
+library(tidyverse) 
+library(broom)
+library(metacoder)
+
+#  install.packages("devtools")
+#  devtools::install_github("grunwaldlab/metacoder")
+
+```
+
+## functions
+```{r functions, message=FALSE, warning=FALSE}
+# function to remove rows with n number of NA's
+delete.na <- function(DF, n=0) {
+  DF[rowSums(is.na(DF)) <= n,]
+}
+
+# Specify alpha as a percentage:
+colorRampAlpha <- function(..., n, alpha) {
+   colors <- colorRampPalette(...)(n)
+   paste(colors, sprintf("%x", ceiling(255*alpha)), sep="")
+}
+
+```
+
+
+## univer variables
+```{r define_universal}
+stud_pat<-"Dammam"  # matches study specific title from pipe (begining of files).
+dir<-"/Users/geraldn/Dropbox/"
+out_file<-"Documents/KAUST/eDNA/R/pipe_summary"
+# export  to project folder
+export_file<-"Documents/KAUST/eDNA/R/csv/"
+# plot export file
+plot_file<-"Documents/KAUST/eDNA/R/plots/Dammam_core"
+#  name of data
+dat_name<-paste(stud_pat,"_filtered_data_all.csv",sep="")  
+# name for dating info
+dating_name<-paste(stud_pat,"_predicted_dating.csv",sep="")
+
+
+## set some other universal variables
+####  !!!! need to be in alphabetical order - tabs in sam_file should match these names too !!!!! also have "type"" column
+primers<-c('18s_stoeck','18smini',"euka02","co1", "rbclmini","vert")
+n_primers<-length(primers)
+## must be in alphabedtica order
+minboots<-c("insect",50,70,90)  # for getting all data minboots and insect data
+min_insect_score<-0.80# set minimum score for insect taxa score
+
+####  !!!! set minimum reads per sample to remove beforre mds   !!!!!   ####
+min_reads_per_miseq<- 1000
+
+################### set file path and name of sample data
+## each primer should have own sheet with name matching primers
+## primer sheets first then location sheet (1 row per each sample location), then other sheets with relevent data
+sam_file_path<-"/Users/geraldn/Dropbox/Documents/KAUST/eDNA/Samples_Data/Dammam/Dammam_sample_data_all.xlsx" ## set sample data file
+##
+
+# lineage names  !!!  used later check
+tl<-c("Superkingdom","Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+
+
+```
+
+## import data
+
+```{r import}
+# sample data -- will need Quality control !!! make sure sample_se make sense
+sheets <- openxlsx::getSheetNames(sam_file_path)
+sam_dat <- lapply(sheets,openxlsx::read.xlsx,xlsxFile=sam_file_path)  # mes1<-sam_dat[[2]]   names(mes1)
+names(sam_dat) <- sheets   # add name to each list
+##    move to next .Rmd - nothing to do her
+locations<-sam_dat[[n_primers+1]]  # isolate locations
+sample_dat<-sam_dat[[n_primers+2]]  # isolate other data
+sample_age<-sam_dat[[n_primers+3]]  # isolate other age
+##
+sam_dat <-sam_dat[1:n_primers]   # keep only primer smaple data
+sam_dat <- lapply(sam_dat, function(df) mutate_at(df, .vars="sample_ID", as.character))  # make sure sample_ID is character
+sample_sam<-bind_rows(sam_dat, .id = 'id')  # names(sam_dat[1:6]) 
+
+# predicted dates
+dates_pred<-data.table::fread(file=paste(dir,export_file,dating_name,sep=""),sep=",")
+   # hist(dates_pred$pred[dates_pred$pred<10])
+
+#  import taxonomy assigned to sequences    names(dat)
+dat<-data.table::fread(file=paste(dir,export_file,dat_name, sep=""), sep=",")
+    
+
+
+
+```
+
+## basic_tidy
+
+```{r tiding}
+  hab_catc<-c("seagrass 1","seagrass 2", "mangrove 1", "mangrove 2","seagrass 3","seagrass 4","mangrove 3", "mangrove 4", "mangrove 5","seagrass 5","seagrass 6")
+hab_cat_lev<-c("seagrass 1","seagrass 2","seagrass 3","seagrass 4","seagrass 5","seagrass 6", "mangrove 1", "mangrove 2","mangrove 3", "mangrove 4", "mangrove 5")
+
+  loc1<- locations %>% # names(loc1)
+    rename_all(tolower) %>% 
+    arrange(-lat) %>% 
+    mutate(core_id_pub=1:length(row.names(locations))) %>% 
+    mutate(hab_cat=factor(hab_catc,levels=hab_cat_lev)) %>% 
+    select(core,habitat, lat,lon,area,direction.loc)
+  
+##  sample data
+sample_age1<- sample_age %>% 
+  rename_all(tolower) %>% 
+  filter(complete.cases(dating_type)) %>% 
+  left_join(loc1)   # names(loc1)
+  #mutate(habitat=factor(habitat), core_id_pub=factor(core_id_pub),      dating_type=factor(dating_type,levels=c("pb","c14")))
+
+## predicted dates
+dates_pred2 <- dates_pred %>%  
+  select(id_dash, core, pred)
+
+# make simple sample names
+sample_names_good <- dat %>%    #   names(dat)
+  filter(!duplicated(sample_id_u))  %>% 
+  select(sample_id_u) %>% 
+  mutate(num=1:length(row.names(.)), sample_id_meta=paste("x_",num,sep="")) %>% 
+  select(-num)
+
+###      tidy sequence data
+ # unique(sample_age1$dating_type)
+dat_all<- dat %>%   # names(dat)   names(dat_all)
+  filter(reads>0) %>% 
+  left_join(dates_pred2) %>%   ## names(dates_pred)
+  left_join(loc1) %>%   ## names(loc1)
+  dplyr::rename(ybp = pred) %>% 
+  mutate(estimated_year=2016-ybp) %>% 
+  mutate(type_3cat=forcats::fct_recode(type, "blank"="extraction blank", "blank" = "pcr blank", "mock" = "positive control")) %>% 
+  mutate(ybp_cat=cut(ybp, breaks=c(-Inf,10,50,100,250,500, Inf), 
+                        labels=c("<10","10-50","50-100","100-250","250-500",">500"))) %>%  
+  mutate(ybp_cat=as.character(ybp_cat), type_3cat=as.character(type_3cat)) %>% 
+  mutate(ybp_cat_blanks=if_else(is.na(ybp_cat), type_3cat  , ybp_cat )) %>% # bring blanks into age cat
+    # unique(dat2$ybp_cat_blanks)
+  mutate(ybp_cat_blanks=factor(ybp_cat_blanks, levels=c("<10","10-50","50-100","100-200","200-500",">500", "sample", "blank","mock"))) %>%
+  mutate(direction.loc=factor(direction.loc, levels=c("North","Mid-north","Mid-south","South"))) %>% 
+  mutate(percent_reads=reads/sample_sum_after_filt*100)  %>% 
+  mutate(log_reads=log(reads+1), log_rare_reads=log(rare_reads+1), log_percent_reads=log(percent_reads+1) )  %>% 
+    mutate(primer=forcats::fct_recode(primer, "18S_V7"="euka02", "18S_V9"="18smini", "18S_V4"="18s_stoeck","CO1"="co1", "Vert"="vert")) %>% 
+  mutate(primer_name=factor(primer,levels=c("18S_V9","18S_V7","18S_V4","CO1","Vert","rbclmini"))) %>% 
+  ## remove samples with minimal reads   !!!!!!!!!!!!!!!!!!!!!!!!!
+  filter(sample_sum_after_filt>min_reads_per_miseq) %>% 
+  ## get new/good sample names
+  left_join(sample_names_good)
+
+#    !!!!!!!!
+#    !!!!!!!!!!!!!!!!!!!!!!!!!   limit  ??????????????    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+dat_all_filt <- dat_all %>%    
+    filter(minboot==70) %>% 
+   filter(ybp>0) %>% 
+   # filter(primer!="rbclmini") %>% 
+   # filter(primer!="Vert") %>% 
+
+  filter(grepl("18S", primer)) %>%   # 137 taxa, 412 for all names(sv)
+  mutate(primer=factor(primer))  # levels(x$primer)
+
+```
+
+## spread
+
+```{r spread}
+
+## sv table needs to be lineage in rows, then sample_id as column names    names(dat2)
+sv<- dat_all_filt %>%   # names(sv)      head(dat2$lineage)  dat2$lineage[1:100]
+  select(lineage, reads, sample_id_meta) %>% 
+  spread(key=sample_id_meta, value= reads, fill = 0) %>% 
+  tidyr::separate(lineage, into=tl, sep=";" , remove=TRUE) %>% 
+  mutate_if(is.character, list(~na_if(., "NA"))) %>% # convert NA to tru NA
+  mutate(Superkingdom="Eukaryota") %>%   # 
+  mutate(Species=gsub("(sp.).*", "\\1", Species)  ) %>%  # clean names remove everything after sp. in speceis
+  ###########################################################################
+##!!!!!!!!!!!!!!!!   removing surface and edaphic taxa   !!!!!!!!!!!!!!!!!!!!
+# filter(ybp>0) %>% removed in basic_tidy
+## remove edaphic taxa  min(dat2$ybp)
+filter(Phylum!="Annelida",Phylum!="Nematoda",Phylum!="Platyhelminthes",Phylum!="Rotifera",Phylum!="Nemertea" ) %>% 
+filter(Kingdom!="Fungi") %>% 
+filter(Order!="Lucinoida",Order!="Nuculoida",Order!="Lamiales",Order!="Alismatales")
+
+  ####  make sure all taxa and samples have info sv[1:5,1:20]
+  c_start_sample<-length(tl)+1  # first column of sample data  
+tr<-c(c_start_sample:length(names(sv)))  # sample data columns    names(sv)
+dr<-c(1:(c_start_sample-1))  # lineage columna
+
+mes_x<-sv[which(rowSums(sv[,tr])>0),]  # remove taxa (rows) with no reads
+mes_t<-mes_x[,tr]
+mes_d<-mes_x[,dr]
+x2<-mes_t[,which(colSums(mes_t)>0)]  # remove samples (columns) with no reads
+sv2<-cbind(mes_d,x2)
+  #    names(mes1)  names(sv2)  8 to 315  setdiff(names(sv) , names(sv2))
+## sample data for making trees - sample_id colun first, must match column names in sv table
+
+
+
+tr<-c(c_start_sample:length(names(sv2))) 
+sample <- dat_all_filt %>%    #names(dat2)
+   select(primer_taxassign_id:type,reads_per_sample_dada:log_percent_reads,sample_id_meta) %>%
+  filter(!duplicated(sample_id_meta))  %>% 
+    filter(sample_id_meta %in% names(sv2[,tr])) %>%  # match up with previous
+  ## final filter, can't have NA's for comparisons
+    filter(type=="sample") %>% 
+    filter(complete.cases(habitat))
+
+levels(sample$primer_name)
+
+```
+
+
+## metacod_run_all
+
+```{r meta_run_euka, , cache=TRUE}
+
+## specify data    # x_dat[1:5,1:20]
+x_dat<-sv2   # sv2 and sample  or   sv_metaz, sample_metaz
+x_sample<-sample
+
+####   begin parsing taxa
+tax<-taxa::parse_tax_data(x_dat, class_cols = tl)
+#  To plot read depth, you first need to add up the number of reads per taxon.
+#  The function `calc_taxon_abund` is good for this. 
+#  this is already done   !!!!!!   skip
+tax$data$taxon_counts <- calc_taxon_abund(tax, data = "tax_data", cols = x_sample$sample_id_meta)
+#    names(otu4)
+tr<-c(2:(length(names(tax$data$taxon_counts)))) # rows of samples taxon col 1   ^^^^  messv +1    ^^^^^^^^
+tax$data$taxon_counts$total <- rowSums(tax$data$taxon_counts[,tr]) # -1 = 
+#  names(tax$data$taxon_counts)
+### for log trans  ????
+tax$data$taxon_counts$total[tax$data$taxon_counts$total==0]<-1
+###   sanity checks
+#   print(tax)  #   get_data(tax)  #   tax$taxon_names
+#  mes<- tax$data$taxon_counts$total   mes[900:128
+### calculate proportions for comparison plots
+tax$data$prop <- calc_obs_props(tax, data = "taxon_counts",
+                                         cols = x_sample$sample_id_meta)
+#  save workspace
+#   save.image(file = paste(dir,"Documents/KAUST/eDNA/R/workspace/",'Dammam_meta.RData', sep="")  )
+
+```
+
+## Notes 
+
+
+## plot_all
+
+```{r plot_all}
+
+bblues<-c('#E4EEF7','#fff7fb','#ece7f2','#d0d1e6','#a6bddb','#74a9cf','#3690c0','#0570b0')
+z<-RColorBrewer::brewer.pal(7, "BuGn") # lower number bettwer less dark
+bbbbb<-colorRampPalette(bblues, alpha=TRUE)(8)
+bluestran<-colorRampAlpha(bblues, n=7, alpha=0.4)
+
+###  all
+set.seed(40)
+heat_tree(tax, 
+          node_label = taxon_names, 
+          node_size = n_obs, 
+          node_color = total,  # was total
+          node_color_trans = "log10",
+          node_size_trans = "area",
+          node_size_range = c(0.005, 0.035),
+          node_label_size_range = c(0.020, 0.028),
+          node_color_range = bluestran, # "BuGn"  "Blues"
+          #node_label_size_trans = "area",
+          node_label_max = 75,
+          overlap_avoidance = 0.70, # >per less overlap
+          node_size_axis_label = "Richness (size)",
+          node_color_axis_label = "Reads (color)",
+          initial_layout = "large-graph", layout = "davidson-harel")
+
+#  save -   metacoder_euka_all
+
+```
+##  plot notes
+1. 
+2. 
+
+
+## plot_habitats
+
+```{r plot_habitats}
+
+###   get differences     cruise_leg     Depth_zone_cat  names(sam)
+tax$data$diff_table <- compare_groups(tax, data = "prop",
+                                      cols = x_sample$sample_id_meta,
+                                      groups = x_sample$habitat)
+tax$data$diff_table$wilcox_p_value_multi <- p.adjust(tax$data$diff_table$wilcox_p_value, method = "fdr")
+## set anything > 0.05 to 0 in log2_median_ratio
+tax$data$diff_table$mean_diff_sig<-tax$data$diff_table$mean_diff
+tax$data$diff_table$mean_diff_sig[tax$data$diff_table$wilcox_p_value >0.05]<-0
+#   print(tax$data$diff_table)
+#   mes<-tax$data$diff_table
+
+set.seed(10)
+heat_tree(tax, 
+          node_label = taxon_names, 
+          node_size = n_obs, 
+          node_color = mean_diff_sig,  #mean_diff_sig
+          node_color_trans = "area",
+          node_size_trans = "area",
+          node_size_range = c(0.005, 0.028),
+          node_color_interval = c(-0.02,0.02), # The range of `log2_median_ratio` to display
+          node_label_size_range = c(0.020, 0.028),
+          node_color_range = c("seagreen", "gray80", "tan4"), # "BuGn"  "Blues"
+          #node_label_size_trans = "area",
+          node_label_max = 75,
+          overlap_avoidance = 0.70, # >per less overlap
+          node_size_axis_label = "Richness (size)",
+          node_color_axis_label = "Mean difference (color)",
+          initial_layout = "large-graph", layout = "davidson-harel")
+
+#  save -   metacoder_euka_habitat_comp
+
+```
+
+
+
+## plot_primers
+
+```{r plot_primers}
+
+x_sample<- x_sample %>% 
+  arrange(primer)
+###   get differences     cruise_leg     Depth_zone_cat  names(sam)
+tax$data$diff_table <- compare_groups(tax, data = "prop",
+                                      cols = x_sample$sample_id_meta,
+                                      groups = x_sample$primer)
+tax$data$diff_table$wilcox_p_value_multi <- p.adjust(tax$data$diff_table$wilcox_p_value, method = "fdr")
+## set anything > 0.05 to 0 in log2_median_ratio
+tax$data$diff_table$mean_diff_sig<-tax$data$diff_table$mean_diff
+tax$data$diff_table$mean_diff_sig[tax$data$diff_table$wilcox_p_value >0.05]<-0
+
+#   print(tax$data$diff_table)
+# mes<-tax$data$diff_table
+#   range(mes$mean_diff)
+### plot
+set.seed(10)
+heat_tree_matrix(tax,
+                 data = "diff_table",
+                 key_size=0.65 , #0.5 means half the width/height of the graph
+                 node_size = n_obs,# n_obs is a function that calculates, the number of OTUs per taxon
+                 node_label = taxon_names,
+                 node_color = mean_diff_sig,
+                 node_color_range = diverging_palette(),
+                 node_color_trans = "area",
+                 node_size_trans = "area",
+                 node_size_range = c(0.005, 0.028),
+                 node_color_interval = c(-0.02, 0.02),#  full range 0.13
+                 edge_color_interval = c(-0.02, 0.02),
+                 node_size_axis_label = "Richness (size)",
+                 node_color_axis_label = "Mean difference (color)",
+                 overlap_avoidance = 0.60, # >per less overlap
+                 node_label_size_range = c(0.027, 0.040),
+                 node_label_max = 30,
+                 initial_layout = "large-graph", layout = "davidson-harel")
+
+#  save -   metacoder_euka_primer_comp
+
+```
+
+
+
+## plot_ages
+
+```{r plot_ages}
+
+### primers
+###   get differences    unique(sample$ybp_cat)  names(sample)
+x_sample<- x_sample %>% 
+  mutate(ybp_cat=factor(ybp_cat, levels=c("<10","10-50","50-100","100-250","250-500",">500"))) %>% 
+  arrange(ybp_cat)
+
+tax$data$diff_table <- compare_groups(tax, data = "prop",
+                                      cols = x_sample$sample_id_meta,
+                                      groups = x_sample$ybp_cat)
+tax$data$diff_table_$wilcox_p_value_multi <- p.adjust(tax$data$diff_table$wilcox_p_value, method = "fdr")
+## set anything > 0.05 to 0 in log2_median_ratio
+tax$data$diff_table$mean_diff_sig<-tax$data$diff_table$mean_diff
+tax$data$diff_table$mean_diff_sig[tax$data$diff_table$wilcox_p_value >0.05]<-0
+#tax$data$diff_table$median_diff_sig<-tax$data$diff_table$median_diff
+#tax$data$diff_table$median_diff_sig[tax$data$diff_table$wilcox_p_value >0.05]<-0
+#
+mes<-tax$data$diff_table
+mes<-arrange(mes,median_diff)
+range(mes$median_diff)
+### plot
+col_int=c(-0.01, 0.01)
+set.seed(1)
+heat_tree_matrix(tax,
+                 data = "diff_table",
+                 key_size=0.75 , #0.5 means half the width/height of the graph
+                 node_size = n_obs,# n_obs is a function that calculates, the number of OTUs per taxon
+                 node_label = taxon_names,
+                 node_color = mean_diff_sig,
+                 node_color_range = diverging_palette(),
+                  node_color_trans = "area",
+                 node_size_trans = "area",
+                 node_size_range = c(0.005, 0.04),
+                 node_color_interval = col_int,#  full range 0.13
+                 edge_color_interval = col_int,
+                 node_size_axis_label = "Richness (size)",
+                 node_color_axis_label = "Mean difference (color)",
+                 overlap_avoidance = 0.60, # >per less overlap
+                 node_label_size_range = c(0.027, 0.040),
+                 node_label_max = 30,
+                 initial_layout = "large-graph", layout = "davidson-harel")
+
+#  save -   metacoder_euk_ybp_5comp
+
+```
+
+Rahditophora-flat worm, Monhysterida-Nematoda
+
+
+## calc_diff_csv
+get statistics fro each taxa and each variable specified
+```{r plot_habitats}
+###########################################################################################
+# comparison stat sheet ---------------------------------------------------
+
+names(x_sample)
+
+tr<-c(19,2,26) # columsn from sample data to run comparisons
+shnam<-c("habitat","primers","ybp") # names for tr
+
+sam<-x_sample   %>% # name sample data
+  mutate_if(is.factor, as.character)
+
+sam2<-sam %>% 
+    select_at(tr)
+pdat<-names(sam2)
+
+# startloop  runs through compare_groups to get info on each taxa, 
+j<-1
+for (i in tr) {
+# get diff
+  mes<-as.data.frame(cbind(sam[,1],sam[,i]))
+  names(mes) [2]<-"var"
+  mes2 <- compare_groups(tax, data = "prop",
+                                      cols = mes$Sample.ID,
+                                      groups = mes$var)
+##  change p_vlaue to adjusted
+  mes2$p_value_adj <- p.adjust(mes2$wilcox_p_value,
+                                               method = "fdr")
+  mes2$variable<-shnam[j]
+  
+  if (i==tr[1]){ tab<- mes2 
+  } else { tab<-rbind(tab,mes2)
+  }
+  
+  j<-j+1
+}
+
+### add taxa information to table
+ttt<-data.frame(cbind(tax$taxon_ids(),tax$taxon_names(), tax$taxon_indexes(), tax$classifications() ))  # mes<-tax$taxon_names   names(tax)  print(tax)
+names(ttt)<-c("taxon_id","taxon_names", "taxon_number", "taxon_classification")
+
+tab<-tab %>% 
+  left_join(ttt)
+  
+#####   suggested filter parameters to add to simplify output
+# p_value_adj, top_n (abs(mean_diff), 30)  , for each habitat
+tab2<-tab %>% 
+    filter(p_value_adj <= 0.05) %>% 
+    group_by(variable) %>% 
+    mutate(abs_mean_diff = abs(mean_diff)) %>% 
+    arrange(variable, desc(abs_mean_diff)) %>% 
+    top_n(30, abs_mean_diff)
+# export
+# put in plots file !!!!!!!!
+#     data.table::fwrite(tab2,paste(dir,plot_file,"/metacoder_euka_no_sruf_adelph.csv",sep=""),row.names=F, sep=",")
+```
+

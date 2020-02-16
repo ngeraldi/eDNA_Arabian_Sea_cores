@@ -1,0 +1,209 @@
+---
+title: "post_DADA2_filtering"
+author: "Nathan R. Geraldi"
+date: "March 21, 2019"
+output: github_document
+---
+
+set table options
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## libraries
+```{r libraries, message=FALSE, warning=FALSE}
+library(RColorBrewer)
+library(rdrop2)  # what is this used for?
+library(vegan)
+library(fields)
+library(psych)
+library(tidyverse) 
+library(broom)
+```
+
+## functions
+```{r functions, message=FALSE, warning=FALSE}
+# function to remove rows with n number of NA's
+delete.na <- function(DF, n=0) {
+  DF[rowSums(is.na(DF)) <= n,]
+}
+```
+
+
+## define universal variables
+```{r define_universal}
+stud_pat<-"Dammam"  # matches study specific title from pipe (begining of files).
+dir<-"/Users/geraldn/Dropbox/"
+out_file<-"Documents/KAUST/eDNA/R/pipe_summary"
+# export  to project folder
+export_file<-"Documents/KAUST/eDNA/R/csv/"
+# plot export file
+plot_file<-"Documents/KAUST/eDNA/R/plots/Dammam_core"
+
+# name for csv that you will save at very end
+export_name<-paste(stud_pat,"_predicted_dating.csv",sep="")
+
+
+## set some other universal variables
+####  !!!! need to be in alphabetical order - tabs in sam_file should match these names too !!!!! also have "type"" column
+primers<-c('18s_stoeck','18smini',"euka02","co1", "rbclmini","vert")
+n_primers<-length(primers)
+## must be in alphabedtica order
+minboots<-c("insect",50,70,90)  # for getting all data minboots and insect data
+min_insect_score<-0.80# set minimum score for insect taxa score
+
+################### set file path and name of sample data
+## each primer should have own sheet with name matching primers
+## primer sheets first then location sheet (1 row per each sample location), then other sheets with relevent data
+sam_file_path<-"/Users/geraldn/Dropbox/Documents/KAUST/eDNA/Samples_Data/Dammam/Dammam_sample_data_all.xlsx" ## set sample data file
+##
+
+```
+
+## import data
+for this script only sample_age is most important
+```{r import}
+# sample data -- will need Quality control !!! make sure sample_se make sense
+sheets <- openxlsx::getSheetNames(sam_file_path)
+sam_dat <- lapply(sheets,openxlsx::read.xlsx,xlsxFile=sam_file_path)  # mes1<-sam_dat[[2]]   names(mes1)
+names(sam_dat) <- sheets   # add name to each list
+##    move to next .Rmd - nothing to do her
+locations<-sam_dat[[n_primers+1]]  # isolate locations  names(locations)
+sample_dat<-sam_dat[[n_primers+2]]  # isolate other data
+sample_age<-sam_dat[[n_primers+3]]  # isolate other age
+##
+sam_dat <-sam_dat[1:n_primers]   # keep only primer smaple data
+sam_dat <- lapply(sam_dat, function(df) mutate_at(df, .vars="sample_ID", as.character))  # make sure sample_ID is character
+sample_sam<-bind_rows(sam_dat, .id = 'id')  # names(sam_dat[1:6]) 
+
+#  import taxonomy assigned to sequences  
+dat<-data.table::fread(file=paste(dir,export_file,export_name,sep=""), sep=",")
+    
+```
+
+## tidy
+get eDNA core slices and age core slices
+```{r tiding}
+# set variables for new names
+hab_catc<-c("seagrass 1","seagrass 2", "mangrove 1", "mangrove 2","seagrass 3","seagrass 4","mangrove 3", "mangrove 4", "mangrove 5","seagrass 5","seagrass 6")
+hab_cat_lev<-c("seagrass 1","seagrass 2","seagrass 3","seagrass 4","seagrass 5","seagrass 6", "mangrove 1", "mangrove 2","mangrove 3", "mangrove 4", "mangrove 5")
+
+# get needed info from locations - data fro each core
+  loc1<- locations %>% # names(locations)
+    rename_all(tolower) %>% 
+    arrange(-lat) %>% 
+    mutate(core_id_pub=1:length(row.names(locations))) %>% 
+    mutate(hab_cat=factor(hab_catc,levels=hab_cat_lev))
+  
+# eDNA slices
+  edna_slice <- sample_sam %>% 
+    rename_all(tolower) %>% 
+    filter(!duplicated(id_dash)) %>% 
+    filter(type=="sample") %>% 
+    filter(id=="18s_stoeck") %>% 
+    select(id_dash,sample_id) %>% 
+    separate(id_dash, into=c("core", "depth.cm"), sep="-" ,remove=FALSE, convert=TRUE) %>% 
+    left_join(loc1[,c(1,2,23)])
+    
+sample_age1<- sample_age %>% 
+  rename_all(tolower) %>% 
+  filter(complete.cases(dating_type)) %>% 
+  left_join(loc1[,c(1,2,13,22,23)]) %>% 
+  mutate(habitat=factor(habitat), core_id_pub=factor(core_id_pub), dating_type=factor(dating_type,levels=c("pb","c14","Linear correction")))
+ # unique(sample_age1$dating_type)
+
+```
+
+## predict
+fit curve to dating and depth data, try 2nd and 3rd polynomial
+from this model predict age of each depth that has eDNA extracted
+```{r predict}
+# get unique slices to simplify predict
+newdat <- edna_slice  %>% 
+  select(depth.cm) %>% 
+  filter(!duplicated(depth.cm))
+
+# get models and predict
+dat <- sample_age1 %>%    #   names(dat)
+  group_by(hab_cat) %>% 
+  nest() %>%   #   lm(depth.cm ~ poly(ybp, 2) 
+  #map(data, ~ loess(ybp ~ depth.cm, data = ., na.action=na.exclude, control=loess.control(surface="direct")))
+  mutate(fit = map(data, ~ lm(ybp ~ poly(depth.cm,2), data = .)), results = map(fit, augment)) %>%  ## glance from broom, augment to keep row for each entry
+  mutate(pred = map(.x = fit, ~ predict(., newdat)))
+## get results to plot  - not used and give error , need to isolate on column
+#dat_mod<-dat %>% 
+ # unnest(results)
+
+# get predict and join with data     names(dat)
+  pred2<-unnest(dat[c(1,5)])  # get predicted data
+  pred2$depth.cm<-rep(newdat$depth.cm, times=length(hab_catc)) ## combine
+                ## merge with data
+  edna_slice<-edna_slice %>% 
+    left_join(pred2) %>% 
+    mutate(pred=if_else(depth.cm==0,0,pred)) # slice -0 is 0
+
+```
+
+
+## plot
+plot dating data, predicted curve, and eDNA predicted dates
+```{r plot}
+#    names(sample_age1)
+habcat2<-data.frame(cbind(hab_cat_lev,letters[1:length(hab_cat_lev)]))
+names(habcat2)[1]<-"hab_cat"
+names(habcat2)[2]<-"lab"
+
+## begin plot     unique(xy$dating_type)
+xy<-sample_age1 %>% 
+  mutate(Dating_method="Pb210") %>% 
+  mutate(Dating_method=if_else(dating_type=="c14","C14",Dating_method)) %>% 
+  mutate(Dating_method=factor(Dating_method))
+
+
+xy2<-edna_slice # names(xy2)
+base_size<-11
+
+ggplot()+
+  geom_point(data=xy, aes(x=depth.cm, y=ybp, col=Dating_method, shape = Dating_method),size = 2)+
+  stat_smooth(data=xy, aes(x=depth.cm, y=ybp), method = "lm", formula = y ~ poly(x, 2), colour="black", size=0.5) +
+  geom_point(data = xy2, aes(x=depth.cm, y=pred)) +
+  # other model fits
+  # stat_smooth(data=xy, aes(x=depth.cm, y=ybp), method = "gam", formula = y ~ s(x, bs = "cs"), colour="grey", size=0.5) +
+  # geom_smooth(data=xy, aes(x=depth.cm, y=ybp), span = 0.8, colour="black", size=0.5)   + #loess 
+  #   add text ideas
+  # geom_text(data=habcat2, aes(x=0, y=inf, label=lab),hjust=1, vjust=1) +
+  # geom_text(aes(x=depth.cm, y=ybp, label=lab),data=data.frame(x=0, y=Inf, lab=habcat2$lab, hab_cat=habcat2$hab_cat), vjust=1)  ## NEED TOOO add lab colum to xy with labels
+  facet_wrap(facets=vars(hab_cat), nrow=6, drop=TRUE, scales="free_y", dir="v", shrink=FALSE) + # fixed
+
+    #scale_x_reverse() +
+    #coord_flip() +
+  
+  scale_colour_brewer(palette = "Set1") +
+  scale_shape(solid=FALSE) +
+  labs(x="Depth (cm)", y="Years before Present") +
+  theme_bw()  # classic -no grids, minimial
+
+#  
+# 
+
+```
+
+## save_plot
+```{r save_plot}
+ggsave(file= paste(dir, plot_file,"/core_dating.tiff",sep=""), width = 15, height = 20, units = "cm", dpi="print")
+
+
+```
+
+## export_data
+```{r save_data}
+## make all dates >0
+edna_slice$pred[edna_slice$pred<0]<-0
+## fix one date w = 10-1, not modeled write
+edna_slice$pred[edna_slice$id_dash=="10-1"]<-3
+edna_slice$pred[edna_slice$id_dash=="10-10"]<-30
+#
+data.table::fwrite(edna_slice,paste(dir,export_file,export_name,sep=""),row.names=F, sep=",")
+
+```
+
