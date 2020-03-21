@@ -188,7 +188,7 @@ sv<- dat_all_filt %>%   # names(sv)      head(dat2$lineage)  dat2$lineage[1:100]
   tidyr::separate(lineage, into=tl, sep=";" , remove=TRUE) %>% 
   mutate_if(is.character, list(~na_if(., "NA"))) %>% # convert NA to tru NA
   mutate(Superkingdom="Eukaryota") %>%   # 
-  mutate(Species=gsub("(sp.).*", "\\1", Species)  ) %>%  # clean names remove everything after sp. in speceis
+  mutate(Species=gsub("(sp. ).*", "\\1", Species)  ) %>%  # clean names remove everything after sp. in speceis
   ###########################################################################
 ##!!!!!!!!!!!!!!!!   removing surface and edaphic taxa   !!!!!!!!!!!!!!!!!!!!
 # filter(ybp>0) %>% removed in basic_tidy

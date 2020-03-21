@@ -27,6 +27,23 @@ library(broom)
 delete.na <- function(DF, n=0) {
   DF[rowSums(is.na(DF)) <= n,]
 }
+
+## to run metaMDS on list
+   mds_dist_fun<- function(df)
+     vegan::metaMDS(df[,c(fn:length(colnames(df)))], distance = "bray", trymax=30)
+   
+##   veganCovEllipse which is hidden in vegan package. This function is applied to each level of NMDS (group) and it uses also function cov.wt to calculate covariance matrix.
+##   https://stackoverflow.com/questions/13794419/plotting-ordiellipse-function-from-vegan-package-onto-nmds-plot-created-in-ggplo
+   
+    veganCovEllipse<-function (cov, center = c(0, 0), scale = 1, npoints = 100) 
+  {
+    theta <- (0:npoints) * 2 * pi/npoints
+    Circle <- cbind(cos(theta), sin(theta))
+    t(center + scale * t(Circle %*% chol(cov)))
+  }
+
+
+
 ```
 
 
@@ -112,7 +129,7 @@ dates_pred2 <- dates_pred %>%
   select(id_dash, core, pred)
 
 ###      tidy sequence data
- # unique(sample_age1$dating_type)
+ # unique(sample_age1$dating_type)   unique(dat2$sample_num)
 dat2<- dat %>%   # names(dat)   names(dates_pred)
   #filter(reads>0) %>% 
   left_join(dates_pred2) %>%   ## names(dates_pred)
@@ -144,9 +161,9 @@ hist(mes$sample_sum_after_filt[mes$sample_sum_after_filt<100000000])
 ```
 
 
-## MDS_prep
+## MDS_all
 
-```{r MDS_prep}
+```{r MDS_all, eval=FALSE, include=FALSE}
 #####     spread so each sample row, first x columns are taxa
 ##   then split by differnt reads transformations
 # names(dat2)   names(dat3)
@@ -155,11 +172,11 @@ names_list_dat3<-c("reads","rare_reads","percent_reads")
 
 dat3<- dat2 %>%  #  mes<-dat2  mes<-dat3[[1]] names(mes)  names(mes[,1:50])
   select(lineage:type,sample_id_u,ybp,type_3cat,ybp_cat_blanks,core,habitat,lat,lon,area,direction.loc, rare_reads, percent_reads) %>% 
-  gather(key="read_transf_type", value="abundance", reads, rare_reads, percent_reads )  %>% #gather differnt read abundances into abundance
+  gather(key="read_transf_type", value="abundance", reads, rare_reads, percent_reads )  %>% #gather differnt read transfomations, stacks dataframe,  abundances into abundance
   #nest(read_transf_type)
   group_split(read_transf_type) %>% 
   set_names(names_list_dat3)
-    #unique(dat3$read_transf_type)
+    #   unique(dat3$read_transf_type)
 
 #####       begin getting distacne matrix
 # set functoin
@@ -172,11 +189,12 @@ dat3<- dat2 %>%  #  mes<-dat2  mes<-dat3[[1]] names(mes)  names(mes[,1:50])
 # split or nest by read_transf_type  then spread then dist matrix.
 dat4<-dat3 %>%    #  mes<-dat4[[1]]   names(mes[,1:50])
   purrr::map(~ .x %>%  spread(key=lineage, value=abundance,  fill=0)) 
+## this next step takes a while, limit data ???
 dat5<-dat4 %>% ## need second to get row names, improve later 
   purrr::map(~ .x %>% mds_dist_fun )
 
-# extract and tidy data fro plots
-
+# extract and tidy data for plots
+#  only data using reads - double transfored
 x<-dat5[[1]]
 x2<-dat4[[1]]
 MDS_xy <- data.frame(x$points)
@@ -264,14 +282,423 @@ ggsave(file=paste(dir,plot_file,"/MDS/mds_primer_6_plot.tiff",sep=""), width = 2
 1. log of reads, 4 groups, 18s co1 insect, all vert, dada co1, and dada 18
 2. no clear effect of habitat, although rbclmini and 18smini yes
 3. effect of ybp, <50 then >50 goruped, except for rbcl-mixed, co1 somewhat continuous change
-4. no clear effect of core
+4. no clear effect of cor## export_data
 
 
+## tidy for time
+```{r time}
+## prep
+## make pattern for filtering
+metaz_pat<-c("Annelida","Arthropoda","Chordata","Cnidaria","Ctenophora","Echinodermata","Gastrotricha","Mollusca","Nematoda","Orthonectida","Platyhelminthes","Porifera","Rotifera","Sipuncula","Tardigrada","Urochordata","Chaetognatha","Craniata","Nemertea","Bryozoa","Hemichordata","Brachiopoda","Entoprocta","Cephalochordata","Entoprocta","Gnathostomulida", "Xenacoelomorpha") 
+metaz_pat<-paste(metaz_pat, collapse = "|")
+
+tl<-c("Superkingdom","Kingdom","Phylum", "Class", "Order", "Family", "Genus", "Species")
+tl2<-c("Superkingdom","Kingdom","Phylum", "Class", "Order")
+
+dat3<- dat2 %>%  #  mes<-dat2  mes<-dat3[[1]] names(dat3)  names(mes[,1:50])
+         mutate(primer=forcats::fct_recode(primer, "18S_V7"="euka02", "18S_V9"="18smini", "18S_V4"="18s_stoeck","CO1"="co1", "Vert"="vert", "RBCL"="rbclmini")) %>% 
+  mutate(primer=factor(primer,levels=c("18S_V9","18S_V7","18S_V4","CO1","Vert","RBCL"))) %>% 
+  tidyr::separate(lineage, into=tl, sep=";" , remove=FALSE) %>% 
+  #
+  select(lineage:type,sample_id_u,ybp,type_3cat,ybp_cat_blanks,core,habitat,lat,lon,area,direction.loc, percent_reads, -reads) %>% 
+  ### limit data
+  filter(type=="sample") %>% 
+  filter(primer !="RBCL") %>% 
+  filter(primer !="Vert") %>% 
+  filter(minboot==70) %>% 
+  filter(complete.cases(habitat)) %>%   # remove replicates of a few samples
+  droplevels() %>% 
+  ###   need to use sample_num, because for Dammam sample_id changes among primers
+  select(-sample_id)
+  
+  
+## break into metaz and euk
+
+## Get euks
+dat_euk<- dat3 %>%    # names(dat_euk)
+  filter(grepl("18S",primer)) %>% 
+  filter(percent_reads>0) %>% 
+  ### colapse data by specified taxa group and sum reads   !!!!!!!!!!
+  ###   need to use sample_num, because for Dammam sample_id changes among primers
+  select(-Species, -Genus, -Family, -lineage) %>%   # remove taxa groups and primer related IDs to collapse
+  group_by_at(vars(Superkingdom:direction.loc)) %>% 
+  summarize( percent_reads = sum(percent_reads)) %>% 
+  ungroup() %>% 
+  ### colapse data get mean among primers   !!!!!!!!!!
+  select(-primer_taxassign_id,-primer,-minboot,-sample_id_u) %>%   # remove taxa groups and primer related IDs to collapse
+  group_by_at(vars(Superkingdom:direction.loc)) %>% 
+  summarize( percent_reads = mean(percent_reads)) %>% 
+  ungroup %>% 
+    # make new lineage
+  unite("lineage", Superkingdom:Order, sep = ";", remove = TRUE) %>% 
+    # split by habitat
+  split(.$habitat)
+
+## get metazoans
+dat_metaz<- dat3 %>%    # names(dat_metaz)   mes<-dat_metaz[[1]]
+  filter(grepl(metaz_pat, Phylum))  %>% 
+  filter(percent_reads>0) %>% 
+  ### colapse data by specified taxa group and sum reads   !!!!!!!!!!
+  select(-Species, -Genus, -Family, -lineage) %>%   # remove taxa groups and primer related IDs to collapse
+  group_by_at(vars(Superkingdom:direction.loc)) %>% 
+  summarize( percent_reads = sum(percent_reads)) %>% 
+  ungroup() %>% 
+  ### colapse data get mean among primers   !!!!!!!!!!
+  select(-primer_taxassign_id,-primer,-minboot,-sample_id_u) %>%   # remove taxa groups and primer related IDs to collapse
+  group_by_at(vars(Superkingdom:direction.loc)) %>% 
+  summarize( percent_reads = mean(percent_reads)) %>% 
+  ungroup %>% 
+    # make new lineage
+  unite("lineage", Superkingdom:Order, sep = ";", remove = TRUE) %>% 
+  # split by habitat
+  split(.$habitat)
+  
+dat_both<-list(dat_euk=dat_euk,dat_metaz=dat_metaz) %>%   # names(dat_both)
+ flatten() %>% 
+  set_names("mangrove - eukaryotes","seagrass - eukaryotes","mangrove - metazoans","seagrass - metazoans")
+
+
+```
+
+
+## cluster all data
+ TO DO if needed
+```{r cluster}
+# K-means clustering
+clust <- kmeans(mds, 3)$cluster %>%
+  as.factor()
+mds <- mds %>%
+  mutate(groups = clust)
+```
+
+## MDS age tidy
+
+```{r MDS}
+#####       begin getting distacne matrix
+# set functoin  !!!!!!!!!
+   fn<-18 ## first column of taxa - check dat4 lines then related mes
+
+# split or nest by read_transf_type  then spread then dist matrix.
+dat4<-dat_both %>%    #  mes<-dat4[[3]]   names(mes[,1:20])
+  purrr::map(~ .x %>%  spread(key=lineage, value=percent_reads,  fill=0)) 
+## this next step takes a while, limit data ???
+dat5<-dat4 %>% ## need second to get row names, improve later 
+  purrr::map(~ .x %>% mds_dist_fun )
+
+  
+  
+##################################################### 
+# extract and tidy data for plotting MDS
+#  only data using reads - double transfored
+##  for euk
+MDS_xy<-dat5# dummy
+for (i in seq_along(dat5)){
+  x<-dat5[[i]]
+  x2<-dat4[[i]]    # names(x2)
+MDS_xy[[i]] <- data.frame(x$points)
+MDS_xy[[i]] <-bind_cols(MDS_xy[[i]], x2[, c(1:fn-1)])
+}
+
+## convert o dataframe
+ MDS_xy1<-bind_rows(MDS_xy, .id = "plot_cat")
+ 
+ ############################################################
+ ###  add additinoal data    names(MDS_xy2)
+MDS_xy2 <- MDS_xy1 %>% 
+      mutate(core=as.character(core)) %>% 
+      mutate(estimated_year=2016-ybp) %>% 
+       mutate(estimated_year_cat=cut(estimated_year, breaks=c(-Inf,1500,1800,1960, 1990, Inf), 
+      labels=c( "<1500","1500-1799", "1800-1959", "1960-1989" , "1990-2016"))) %>% 
+    mutate(estimated_year_surf_cat=cut(estimated_year, breaks=c(-Inf,1500,1800,1960,1990,2015, Inf), 
+      labels=c( "<1500","1500-1799","1800-1959", "1960-1989", "1990-2015","2016" ))) %>% 
+    #mutate(taxa_cat=if_else(mds_cat=="dat_euk" , "eukaryotes", "metazoans")) %>% 
+    #unite("plot_cat", habitat, taxa_cat, sep = " - ", remove = FALSE) %>% 
+   # organize columns
+   mutate(group=estimated_year_surf_cat) %>%  # add for consistancy and ease !!!!!!!!!!!!!!!!!
+   select(group, core, estimated_year,estimated_year_cat,estimated_year_surf_cat,plot_cat, everything())
+ 
+ 
+ MDS_xy2_means<- MDS_xy2 %>% 
+    select(group,plot_cat,  habitat, MDS1, MDS2)  %>% 
+    group_by(group,plot_cat, habitat) %>% 
+    summarize(MDS1=mean(MDS1),MDS2=mean(MDS2), count=n()) %>% 
+     arrange(plot_cat, desc(group))
+ 
+  MDS_xy2_arrow<- MDS_xy2_means %>% 
+        arrange(plot_cat, group) %>% 
+        select(-habitat)  %>% 
+        group_by(plot_cat) %>% 
+        slice(2:n()) %>%  # remov first row
+        rename(x1=MDS1, y1=MDS2)
+    mes<- MDS_xy2_means %>% 
+        arrange(plot_cat, group) %>% 
+        select(-habitat)  %>% 
+        group_by(plot_cat) %>% 
+        slice(1:(n()-1))  # remov last row
+    
+    ## put together
+    MDS_xy2_arrow$x2<-mes$MDS1
+    MDS_xy2_arrow$y2<-mes$MDS2
+    
+      MDS_xy2_arrow <- MDS_xy2_arrow %>% 
+        arrange(plot_cat, group)
+      
+    
+    
+    # remove 1st - slice(2:n()), remove 2nd   slice(1:(n()-1)) 1st and last - slice(2:(n()-1))
+  
+
+    
+ 
+```
+   Orignial groups were as followed, but 1930-1960 and 1800-1929 only had 2 or 3 samples
+    mutate(estimated_year_cat=cut(estimated_year, breaks=c(Inf,1990,1960,1930,1800,1600, -Inf), 
+                        labels=c("1990-2016","1960-1989","1930-1959","1800-1929","1600-1799","<1600")))
+ 
+ 
+## get stress
+```{r env stress}                       
+                        
+                        ## get stress  so we can add it to plots !!
+#  names(dat5)
+mes<-dat5[[1]]
+#  mes$stress   names(mes)  names(stress)  class(stress)
+
+stress<-lapply(dat5, function(x) x$stress)
+stress<-data.frame(t(bind_rows(stress)))
+colnames(stress)<-"stress_num"
+stress<- stress %>% 
+    mutate(plot_cat=row.names(.)) %>% 
+    mutate(letters= letters[1:length(row.names(.))])  # 
+  
+
+```
+                        
+
+## env fit
+```{r env fit}
+##################################################### 
+## run envfit for species vectors
+   #scrs <- as.data.frame(scores(mds, display = "sample_num"))
+   #scrs <- cbind(scrs, Group = estimated_year_cat)
+ 
+ vf_spp<-dat5# dummy
+vf_spp_all<-dat5# dummy
+
+for (i in seq_along(dat5)){
+    df<-dat4[[i]]
+    x<-dat5[[i]]
+  vf<- vegan::envfit(x, df[,c(fn:length(colnames(df)))], perm = 999)
+  spp.scrs <- as.data.frame(scores(vf, display = "vectors"))
+  spp.scrs <- cbind(spp.scrs, lineage = rownames(spp.scrs)) # make lineage a column
+  spp.scrs$pvals<-vf$vectors$pvals  # names(vf)
+  
+  spp.scrs_all<-spp.scrs  %>%  # 
+      tidyr::separate(lineage, into=tl2, sep=";" , remove=FALSE) %>%   # make for labels
+      mutate(sp_label=if_else( Order!="NA", Order, Class)) %>%  # complete.cases(spp.scrs.p$Order)
+    ## filter by p value and smallest p 
+      filter(pvals <= 0.05) 
+  
+   spp.scrs.p<-spp.scrs_all  %>% 
+      arrange(pvals) %>% 
+        top_n(-20, pvals)
+  
+  vf_spp[[i]] <- spp.scrs.p
+  vf_spp_all[[i]] <- spp.scrs_all
+}
+#  names(vf_spp) 
+
+ ## convert o dataframe
+ vf_spp<-bind_rows(vf_spp, .id = "plot_cat")
+ vf_spp_all<-bind_rows(vf_spp_all, .id = "plot_cat")
+ 
+ ## tidy all for interpretaion   names(vf_spp_all)
+  vf_spp_all <- vf_spp_all %>% 
+      arrange(plot_cat, Superkingdom, Kingdom,Phylum,Class,Order,NMDS1,NMDS2,pvals)
+
+
+```
+
+
+Notes for envfit
+mangrove euks
+more clear if only discuss increases to present - all diatomes -Naviculales, Bacillariales, Rhopalodiales, Fragiliariales, Rhabdocoela, Thalassiophysales, Cocconeidales, Surrirellales 
+some species hight in 1800-1960 -macroalgae brown green and red (class-Florideophyceae), Collodaria and spumellaria - protist, insects; syndiniales (dinoflagellates (also known as Marine Alveolates, "MALVs"), found as parasites of crustaceans, fish, algae, cnidarians, and protists)
+
+
+seagrass euks
+Comparitavley clear pattern through time alon one axis, similar to mangrove increase in diatomes (Cocconeidales, Cymbellales, Naviculales, Rhopalodiales, Fragilariales, and Triceratiales) and Euplotida, a ciliate. Other taxa decreased through time including macroalgae (dictyotales, Ceramlales, Gigartinales), dinaoflagetlates (syndiniales)
+
+mangrove met
+- get # of smaples for 3 Orders, primates n=5, myliobatiformes (n=1), Decapoda (n=5), of 29 samples
+
+seagrass met
+decreses through time in Thysanoptera (flying insect), Acanthuriformes fish, Amphipoda, Scleractinia corals, Cheilostomatida bryozoan, Trachymedusae jellyfish.
+ increases in podocopida ostracod, Mytiloida mussels, Apodida sea cucumbers, Chaetonotida gastrotrich,  Chromadorida nematode
+
+
+
+
+
+
+## add taxa data
+```{r taxa_data}
+# define edaphic taxa
+kingdom_remove<-c("Fungi")
+phylum_remove<-c("Annelida","Nematoda","Platyhelminthes","Rotifera","Nemertea")
+order_remove<-c("Lucinoida","Nuculoida","Lamiales","Alismatales")
+
+
+ vf_spp2 <- vf_spp %>% 
+   #  add edaphic yes/no column
+      mutate(edaphic="no") %>% 
+      mutate(edaphic=if_else(grepl(paste(kingdom_remove, collapse="|"), Kingdom), "yes", edaphic)  ) %>% 
+      mutate(edaphic=if_else(grepl(paste(phylum_remove, collapse="|"), Phylum), "yes", edaphic)  ) %>% 
+    mutate(edaphic=if_else(grepl(paste(order_remove, collapse="|"), Order), "yes", edaphic)  ) %>% 
+   # add autotroph yes/no column
+      mutate(autotroph="no") %>% 
+      mutate(autotroph=if_else(Kingdom=="Viridiplantae", "yes", autotroph)) %>% 
+      mutate(autotroph=if_else(Phylum=="Bacillariophyta", "yes", autotroph)) %>% 
+      mutate(autotroph=if_else(Phylum=="Rhodophyta", "yes", autotroph)) %>% 
+      mutate(autotroph=if_else(Class=="Phaeophyceae", "yes", autotroph)) %>% 
+   # add columns font_type and word_color
+       mutate(font_type=if_else(edaphic=="yes", "italic", "bold")) %>% 
+      mutate(word_color=if_else(autotroph=="yes", "seagreen4", "grey20"))
+
+```
+
+
+
+## get elipses
+
+```{r elipses}
+ df_ell <- MDS_xy2 %>%    # names(MDS_xy2)
+   #mutate(group=estimated_year_cat)  %>%  # name grouping factor
+  select(group, everything() ) %>% 
+  # split to make original lists
+  split(.$plot_cat)
+
+
+for (i in seq_along(df_ell)){  
+    x<-data.frame()
+  for(g in levels(df_ell[[i]]$group)){
+    x <- rbind(x, cbind(as.data.frame(with(df_ell[[i]][df_ell[[i]]$group==g,],
+                    veganCovEllipse(cov.wt(cbind(MDS1,MDS2),wt=rep(1/length(MDS1),                                              length(MDS1)))$cov,center=c(mean(MDS1),mean(MDS2)))))
+                    ,group=g))
+  }
+    df_ell[[i]]<-x
+  
+}
+
+## convert o dataframe
+ df_ell<-bind_rows(df_ell, .id = "plot_cat")
+ 
+```
+
+
+## plot time
+```{r plot_time}
+#
+ccol<-(brewer.pal(6,"Reds"))[2:7]
+ccol<-rev(c('#543005','#bf812d','#c7eae5','#80cdc1','#01665e'))
+# '#543005','#8c510a','#bf812d','#dfc27d','#f6e8c3','#c7eae5','#80cdc1','#35978f','#01665e','#003c30'
+ccol<-rev(c("#D0B990","#B1876B","#92574B","#733136","#541C2D","#350D23")[c(1:6)])
+
+# basic plot
+ P_mds<- ggplot(MDS_xy2, aes(MDS1, MDS2)) + 
+  geom_point(aes(color = group), size=0.7)  +
+   scale_color_manual(values=ccol) +
+  facet_wrap(facets=vars(plot_cat), nrow=2, drop=TRUE, scales="free", dir="v", shrink=FALSE) 
+ 
+  # add arrows between mean groups 
+    P_mds<- P_mds + geom_segment(MDS_xy2_arrow, mapping = aes(x=x1, xend=x2, y=y1, yend=y2), size=1.5, alpha=0.5,
+                  arrow=arrow(angle = 35, length=unit(0.4,"cm"), type="open", ends = "first"))  +
+ # add means
+  geom_point(MDS_xy2_means, mapping = aes(MDS1, MDS2, color = group), size=3) 
+
+  # fix theme  need  coord_fixed()+
+ P_mds<- P_mds +theme_minimal() +  # minimal good  or linedraw
+  theme(panel.border = element_rect(colour = "black", fill = "transparent"), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), strip.text.x = element_blank() ) 
+ 
+ # add letter labels and stress
+ P_mds<- P_mds + geom_text( data = stress, mapping = aes(x = -Inf, y = Inf, label = letters),
+  hjust   = -0.9, vjust = 1.6) +
+          geom_text( data = stress, mapping = aes(x = Inf, y = -Inf, label = sprintf("%0.2f", round(stress_num, digits = 3)) ),
+  hjust   = 1.4, vjust = -1.3 , size=3)  
+  
+## add elipses
+    P_mds <-  P_mds + 
+    geom_polygon(data=df_ell, aes(x=MDS1, y=MDS2, fill=group), alpha=0.40, size=0, show.legend=FALSE) +
+    scale_fill_manual(values=ccol) 
+## add arrows again  
+    P_mds<- P_mds + geom_segment(MDS_xy2_arrow, mapping = aes(x=x1, xend=x2, y=y1, yend=y2), size=1.5, alpha=0.9, color = "grey95",
+                  arrow=arrow(angle = 35, length=unit(0.4,"cm"), type="open", ends = "first")) 
+    
+     
+## fix legend label
+  P_mds<- P_mds + labs(color = "Estimated year") +
+    theme(legend.position = c(0, 0), 
+      legend.justification = c(0, 0.03), legend.direction="vertical")
+
+## add arrows with species
+  P_mds_species<-  P_mds + geom_segment(data = vf_spp2,
+               aes(x = 0, xend = NMDS1, y = 0, yend = NMDS2),
+               arrow = arrow(length = unit(0.15, "cm")), color = "grey30", lwd=0.4) +
+  ggrepel::geom_text_repel(data = vf_spp2, aes(x = NMDS1, y = NMDS2, label = sp_label,
+                          fontface = font_type), color= vf_spp2$word_color,
+             cex = 3, direction = "both", segment.size = 0.25, segment.color= "grey60")
+  
+     
+
+  
+```
 
 ## export_data
 ```{r save_data}
 
+ggsave(P_mds, file=paste(dir,plot_file,"/MDS/mds_habs_time_4plot.pdf",sep=""), width = 25, height = 25, units = "cm", dpi="print")
+
+ggsave(P_mds_species, file=paste(dir,plot_file,"/MDS/mds_habs_time_speciesarrows_4plot.pdf",sep=""), width = 25, height = 25, units = "cm", dpi="print")
+
 data.table::fwrite(edna_slice,paste(dir,export_file,export_name,sep=""),row.names=F, sep=",")
 
 ```
+
+
+## scatter-OLD
+used initially, but then switched to base ggplot
+```{r OLD}
+
+#####################################################################################
+## using scatter  ###########################################################
+P_mds<-ggpubr::ggscatter(MDS_xy2, x = "MDS1", y = "MDS2",
+          color = "estimated_year_cat",size=1, palette = "RdYlBu",
+          ellipse = TRUE, ellipse.type = "convex", ellipse.border.remove=TRUE,
+          mean.point = TRUE, mean.point.size= 4,
+          star.plot = FALSE, star.plot.lwd=0.2, star.plot.lty=2 ) +
+  #coord_fixed()+
+  facet_wrap(facets=vars(plot_cat), nrow=2, drop=TRUE, scales="free", dir="v", shrink=FALSE) 
+  # fix theme  need  coord_fixed()+
+ P_mds<- P_mds +theme_minimal() +  # minimal good  or linedraw
+  theme(panel.border = element_rect(colour = "black", fill = "transparent"), panel.grid.major = element_blank(), panel.grid.minor = element_blank() ) 
+## fix legend label
+  P_mds<-  ggpubr::ggpar(P_mds, legend.title = "Estimated year")
+  
+## add elipses
+  P_mds_species<-  P_mds + 
+      geom_path(data=df_ell, aes(x=MDS1, y=MDS2,colour=group), size=1, linetype=2)
+
+## add arrows with species
+  P_mds_species<-  P_mds +geom_segment(data = vf_spp2,
+               aes(x = 0, xend = NMDS1, y = 0, yend = NMDS2),
+               arrow = arrow(length = unit(0.15, "cm")), colour = "grey15", lwd=0.25) +
+  ggrepel::geom_text_repel(data = vf_spp2, aes(x = NMDS1, y = NMDS2, label = sp_label, 
+                                               fontface = font_type), color= vf_spp2$word_color,
+             cex = 3, direction = "both", segment.size = 0.25, segment.color= "grey70")   # names(vf_spp2)
+  
+  
+
+```
+
+
 
