@@ -25,8 +25,8 @@ library("rnaturalearth")
 library("rnaturalearthdata")
 library("grid")
 # define map
-world <- ne_countries(scale='medium',returnclass = 'sf') # 
-me <- ne_countries(scale='large', continent = 'asia', returnclass = 'sf') #  unique(world$region_wb)   unique(world$continent)
+world <- rnaturalearth::ne_countries(scale='medium',returnclass = 'sf') # 
+me <- rnaturalearth::ne_countries(scale='large', continent = 'asia', returnclass = 'sf') #  unique(world$region_wb)   unique(world$continent)
 ```
 
 ## functions
@@ -150,7 +150,7 @@ hc<-c("seagreen", "tan4")
     theme(legend.position="bottom") +
      theme(panel.grid.major = element_line(colour = gray(0.2), linetype = "dashed", 
          size = 0.5), panel.background = element_rect(fill = "aliceblue"), 
-         panel.border = element_rect(fill = NA)))
+         panel.border = element_rect(fill = NA))    )
 
 
 (Nor <- ggplot(data = me) +
@@ -224,8 +224,6 @@ ggpubr::ggarrange(sa,
                     Sou + theme(legend.position="none",panel.grid.major = element_line(colour="transparent"), panel.grid.minor = element_line(colour="transparent"), panel.background = element_rect(fill = "aliceblue") ),
                     ncol = 2, nrow=2, align = "v"), 
   nrow = 1, ncol=2) 
-
-
 # 
 
 ```
