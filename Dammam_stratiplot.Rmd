@@ -614,10 +614,12 @@ metaz_pat<-paste(metaz_pat, collapse = "|")
 
 metaz_phylum <-euk_phylum %>%   # names(euk_phylum)  unique(dat3$habitat) 
   filter(grepl(metaz_pat, Phylum))  %>% 
+  ## recalculate percen for metazoans only
   group_by(primer, core, ybp) %>% 
   mutate(sum_metaz_reads = sum(reads)) %>% 
   ungroup() %>% 
   mutate(percent_reads = (reads / sum_metaz_reads)  * 100) %>% 
+  
   #  !!!!!!  remove if sample ahs less than 100 metazoan reads  !!!
   filter(sum_metaz_reads>=100)
 

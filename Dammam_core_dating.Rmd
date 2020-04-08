@@ -89,7 +89,7 @@ hab_catc<-c("seagrass 1","seagrass 2", "mangrove 1", "mangrove 2","seagrass 3","
 hab_cat_lev<-c("seagrass 1","seagrass 2","seagrass 3","seagrass 4","seagrass 5","seagrass 6", "mangrove 1", "mangrove 2","mangrove 3", "mangrove 4", "mangrove 5")
 
 # get needed info from locations - data fro each core
-  loc1<- locations %>% # names(locations)
+  loc1<- locations %>% # names(locations)  names(loc1)
     rename_all(tolower) %>% 
     arrange(-lat) %>% 
     mutate(core_id_pub=1:length(row.names(locations))) %>% 
@@ -103,7 +103,7 @@ hab_cat_lev<-c("seagrass 1","seagrass 2","seagrass 3","seagrass 4","seagrass 5",
     filter(id=="18s_stoeck") %>% 
     select(id_dash,sample_id) %>% 
     separate(id_dash, into=c("core", "depth.cm"), sep="-" ,remove=FALSE, convert=TRUE) %>% 
-    left_join(loc1[,c(1,2,23)])
+    left_join(loc1[,c(1,2,22,23)])
     
 sample_age1<- sample_age %>% 
   rename_all(tolower) %>% 
@@ -137,6 +137,7 @@ dat <- sample_age1 %>%    #   names(dat)
 # get predict and join with data     names(dat)
   pred2<-unnest(dat[c(1,5)])  # get predicted data
   pred2$depth.cm<-rep(newdat$depth.cm, times=length(hab_catc)) ## combine
+  
                 ## merge with data
   edna_slice<-edna_slice %>% 
     left_join(pred2) %>% 
@@ -153,17 +154,27 @@ habcat2<-data.frame(cbind(hab_cat_lev,letters[1:length(hab_cat_lev)]))
 names(habcat2)[1]<-"hab_cat"
 names(habcat2)[2]<-"lab"
 
-## begin plot     unique(xy$dating_type)
+fl_map_cat<-c("1-seagrass","2-seagrass","3-mangrove","4-mangrove","5-seagrass","6-seagrass","7-mangrove","8-mangrove","9-mangrove","10-seagrass","11-seagrass")
+
+## begin plot     unique(xy$hab_cat_map)
 xy<-sample_age1 %>% 
   mutate(Dating_method="Pb210") %>% 
   mutate(Dating_method=if_else(dating_type=="c14","C14",Dating_method)) %>% 
-  mutate(Dating_method=factor(Dating_method))
+  mutate(Dating_method=factor(Dating_method)) %>% 
+  unite(hab_cat_map, c(core_id_pub, habitat), sep="-", remove=FALSE) %>% 
+  mutate(hab_cat_map=factor(hab_cat_map,levels=fl_map_cat))
 
 
-xy2<-edna_slice # names(xy2)
+xy2<-edna_slice %>%  # names(xy2)
+  unite(hab_cat_map, c(core_id_pub, habitat), sep="-", remove=FALSE)%>% 
+  mutate(hab_cat_map=factor(hab_cat_map,levels=fl_map_cat))
+
 base_size<-11
+A<-expression(paste(C^14))
 
-ggplot()+
+lllab<-c(expression(paste(""^"14","C   ")), expression(paste(""^"210","Pb ")))   ## labels for dating, spaces added to align labels
+
+dat_p<-ggplot()+
   geom_point(data=xy, aes(x=depth.cm, y=ybp, col=Dating_method, shape = Dating_method),size = 2)+
   stat_smooth(data=xy, aes(x=depth.cm, y=ybp), method = "lm", formula = y ~ poly(x, 2), colour="black", size=0.5) +
   geom_point(data = xy2, aes(x=depth.cm, y=pred)) +
@@ -173,15 +184,18 @@ ggplot()+
   #   add text ideas
   # geom_text(data=habcat2, aes(x=0, y=inf, label=lab),hjust=1, vjust=1) +
   # geom_text(aes(x=depth.cm, y=ybp, label=lab),data=data.frame(x=0, y=Inf, lab=habcat2$lab, hab_cat=habcat2$hab_cat), vjust=1)  ## NEED TOOO add lab colum to xy with labels
-  facet_wrap(facets=vars(hab_cat), nrow=6, drop=TRUE, scales="free_y", dir="v", shrink=FALSE) + # fixed
+  facet_wrap(facets=vars(hab_cat_map), nrow=6, drop=TRUE, scales="free_y", dir="v", shrink=FALSE) + # fixed
 
     #scale_x_reverse() +
     #coord_flip() +
   
-  scale_colour_brewer(palette = "Set1") +
-  scale_shape(solid=FALSE) +
-  labs(x="Depth (cm)", y="Years before Present") +
+  scale_colour_brewer(palette = "Set1", labels = lllab) +
+  scale_shape(solid=FALSE, labels = lllab) +
+  labs(x="Depth (cm)", y="Years before Present", color = "Dating method", shape = "Dating method") +
   theme_bw()  # classic -no grids, minimial
+
+
+
 
 #  
 # 
@@ -190,7 +204,7 @@ ggplot()+
 
 ## save_plot
 ```{r save_plot}
-ggsave(file= paste(dir, plot_file,"/core_dating.tiff",sep=""), width = 15, height = 20, units = "cm", dpi="print")
+ggsave(dat_p, file= paste(dir, plot_file,"/core_dating.tiff",sep=""), width = 15, height = 20, units = "cm", dpi="print")
 
 
 ```

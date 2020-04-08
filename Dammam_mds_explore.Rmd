@@ -31,6 +31,9 @@ delete.na <- function(DF, n=0) {
 ## to run metaMDS on list
    mds_dist_fun<- function(df)
      vegan::metaMDS(df[,c(fn:length(colnames(df)))], distance = "bray", trymax=30)
+## use with log+1 transform - very little difference use above- usually sqrt with wisconsin  
+#      mds_dist_fun<- function(df)
+#     vegan::metaMDS( vegan::wisconsin(log(  (df[,c(fn:length(colnames(df)))])  +1) ), distance = "bray", trymax=30, autotransform = FALSE)
    
 ##   veganCovEllipse which is hidden in vegan package. This function is applied to each level of NMDS (group) and it uses also function cov.wt to calculate covariance matrix.
 ##   https://stackoverflow.com/questions/13794419/plotting-ordiellipse-function-from-vegan-package-onto-nmds-plot-created-in-ggplo
@@ -143,8 +146,13 @@ dat2<- dat %>%   # names(dat)   names(dates_pred)
   mutate(ybp_cat_blanks=if_else(is.na(ybp_cat), type_3cat  , ybp_cat )) %>% # bring blanks into age cat
     # unique(dat2$ybp_cat_blanks)
   mutate(ybp_cat_blanks=factor(ybp_cat_blanks, levels=c("<10","10-50","50-100","100-200","200-500",">500", "sample", "blank","mock"))) %>%
-  mutate(direction.loc=factor(direction.loc, levels=c("North","Mid-north","Mid-south","South"))) %>% 
-  mutate(percent_reads=reads/sample_sum_after_filt*100)  %>% 
+  mutate(direction.loc4=factor(direction.loc, levels=c("North","Mid-north","Mid-south","South"))) %>% 
+  mutate(direction.loc=forcats::fct_recode(direction.loc4, "North"="Mid-north", "South" = "Mid-south")) %>% 
+  unite("direction.loc_hab", habitat,direction.loc4 , sep="_", remove = FALSE) %>% 
+  mutate(direction.loc_hab=forcats::fct_recode( direction.loc_hab ,"seagrass_Central"="seagrass_Mid-south","seagrass_Central"="seagrass_Mid-north", "mangrove_restored"="mangrove_Mid-north", "mangrove_natural" ="mangrove_Mid-south")) %>% # levels(dat2$direction.loc_hab)
+  mutate(direction.loc_hab=factor(direction.loc_hab, levels=c("seagrass_North", "seagrass_Central","seagrass_South", "mangrove_restored", "mangrove_natural") )  ) %>% 
+  
+  mutate(percent_reads=(reads/sample_sum_after_filt) *100)  %>% 
   mutate(log_reads=log(reads+1), log_rare_reads=log(rare_reads+1), log_percent_reads=log(percent_reads+1) )  %>% 
   ## remove samples with minimal reads   !!!!!!!!!!!!!!!!!!!!!!!!!
   filter(sample_sum_after_filt>min_reads_per_miseq)
@@ -157,6 +165,14 @@ hist(mes$sample_sum_after_filt[mes$sample_sum_after_filt<100000000])
 #mes<-dat2 %>%      
 #  filter(!duplicated(id_dash)) 
 #  barplot(dplyr::count(mes, ybp_cat))
+
+## table for NCBI           names(dat2)   unique(dat2$direction.loc)
+ncbi<-dat2 %>%      
+  filter(!duplicated(sample_num)) %>% 
+  select(sample_num, sample_id, type, core, id_dash, ybp,estimated_year, habitat:lon ) %>% 
+  mutate(id_dash= sub(".*-", "", id_dash)) %>% 
+  rename(core_depth=id_dash, core_id=core)
+#  data.table::fwrite(ncbi,paste(dir,export_file,stud_pat,"_ncbi_sample_data.csv",sep=""),row.names=F, sep=",")
 
 ```
 
@@ -214,17 +230,15 @@ purrr::map(dat3, c(1:fn))  # extract columns 1 to fn from all df in list
  
 ```
 
-## Important - because double standardize, differences in total reads is removed -use reads not rarefied or %
+Important - because double standardize, differences in total reads is removed -use reads not rarefied or %
 
-## MDS out-put, 
-# for reads- no convergence,  sqrt trans, wisconsin double stand 
-# for rarified reads- no convergence,  sqrt trans, wisconsin double stand
-# for percent reads- no convergence,  sqrt trans, wisconsin double stand
+MDS out-put, 
+- not converge if include everything as one
 
 
-## MDS_plot
+## MDS_plot_all
 
-```{r MDS_plot}
+```{r MDS_plot, eval=FALSE, include=FALSE}
 ###   all
 ggplot(MDS_xy, aes(MDS1, MDS2, color = primer, size=type , shape=minboot)) + geom_point() + theme_bw()  +
   scale_colour_brewer(palette = "Set1") +
@@ -278,15 +292,16 @@ ggplot(MDS_xy2, aes(MDS1, MDS2, color = ybp_cat_blanks , shape= habitat, size=yb
 ggsave(file=paste(dir,plot_file,"/MDS/mds_primer_6_plot.tiff",sep=""), width = 20, height = 25, units = "cm", dpi="print")
 
 ```
-##  plot notes
+
+plot notes
 1. log of reads, 4 groups, 18s co1 insect, all vert, dada co1, and dada 18
 2. no clear effect of habitat, although rbclmini and 18smini yes
 3. effect of ybp, <50 then >50 goruped, except for rbcl-mixed, co1 somewhat continuous change
 4. no clear effect of cor## export_data
 
 
-## tidy for time
-```{r time}
+## tidy catagories
+```{r t_cata}
 ## prep
 ## make pattern for filtering
 metaz_pat<-c("Annelida","Arthropoda","Chordata","Cnidaria","Ctenophora","Echinodermata","Gastrotricha","Mollusca","Nematoda","Orthonectida","Platyhelminthes","Porifera","Rotifera","Sipuncula","Tardigrada","Urochordata","Chaetognatha","Craniata","Nemertea","Bryozoa","Hemichordata","Brachiopoda","Entoprocta","Cephalochordata","Entoprocta","Gnathostomulida", "Xenacoelomorpha") 
@@ -300,12 +315,15 @@ dat3<- dat2 %>%  #  mes<-dat2  mes<-dat3[[1]] names(dat3)  names(mes[,1:50])
   mutate(primer=factor(primer,levels=c("18S_V9","18S_V7","18S_V4","CO1","Vert","RBCL"))) %>% 
   tidyr::separate(lineage, into=tl, sep=";" , remove=FALSE) %>% 
   #
-  select(lineage:type,sample_id_u,ybp,type_3cat,ybp_cat_blanks,core,habitat,lat,lon,area,direction.loc, percent_reads, -reads) %>% 
+  select(lineage:type,sample_id_u,ybp,type_3cat,ybp_cat_blanks,core,habitat,lat,lon,area,direction.loc,direction.loc_hab, percent_reads, -reads) %>% 
   ### limit data
   filter(type=="sample") %>% 
   filter(primer !="RBCL") %>% 
   filter(primer !="Vert") %>% 
   filter(minboot==70) %>% 
+  ## remove bad dated core number 7 when n to s, but 10 original #
+  filter( core != 10 ) %>%   # unique(dat2$core)
+  
   filter(complete.cases(habitat)) %>%   # remove replicates of a few samples
   droplevels() %>% 
   ###   need to use sample_num, because for Dammam sample_id changes among primers
@@ -314,45 +332,90 @@ dat3<- dat2 %>%  #  mes<-dat2  mes<-dat3[[1]] names(dat3)  names(mes[,1:50])
   
 ## break into metaz and euk
 
+#### 1 -- sum percent reads at selected lineage -- Order now
+#### 2 -- sum percent reads over all primer pairs
+#### 3 -- then re-calculate percent
+
 ## Get euks
-dat_euk<- dat3 %>%    # names(dat_euk)
+dat_euk_base<- dat3 %>%    # names(dat_euk)
   filter(grepl("18S",primer)) %>% 
   filter(percent_reads>0) %>% 
   ### colapse data by specified taxa group and sum reads   !!!!!!!!!!
   ###   need to use sample_num, because for Dammam sample_id changes among primers
   select(-Species, -Genus, -Family, -lineage) %>%   # remove taxa groups and primer related IDs to collapse
-  group_by_at(vars(Superkingdom:direction.loc)) %>% 
+  group_by_at(vars(Superkingdom:direction.loc,direction.loc_hab)) %>% 
   summarize( percent_reads = sum(percent_reads)) %>% 
   ungroup() %>% 
-  ### colapse data get mean among primers   !!!!!!!!!!
+  ### colapse data for primer pairs, get mean per sample  !!!!!!!!!!
   select(-primer_taxassign_id,-primer,-minboot,-sample_id_u) %>%   # remove taxa groups and primer related IDs to collapse
-  group_by_at(vars(Superkingdom:direction.loc)) %>% 
-  summarize( percent_reads = mean(percent_reads)) %>% 
-  ungroup %>% 
+  group_by_at(vars(Superkingdom:direction.loc,direction.loc_hab)) %>% 
+  summarize( percent_reads = mean(percent_reads)  ) %>% 
+  ungroup() %>% 
+  
+  ## tried summing reads per sample then finding new total percent then updating percent
+  #      based on this.  using mean is better
+  ## get sum percent per sample    
+  #group_by_at(vars(sample_num:direction.loc)) %>% 
+  #mutate(sum_percent_per_sample= sum(percent_reads_first))  %>% 
+  #ungroup() %>% 
+  
+  ## calculate new and good percent per sample
+  #mutate( percent_reads = (percent_reads/sum_percent_per_sample)*100  ) %>% 
+  #ungroup() %>%   # hist(dat_euk$percent_reads)
+
     # make new lineage
-  unite("lineage", Superkingdom:Order, sep = ";", remove = TRUE) %>% 
-    # split by habitat
+  unite("lineage", Superkingdom:Order, sep = ";", remove = TRUE) 
+  
+####################################
+## added so can use for other catagories
+   dat_euk<- dat_euk_base %>% 
+    # split by catagory, will run separate mds for each
   split(.$habitat)
 
+
+
+
 ## get metazoans
-dat_metaz<- dat3 %>%    # names(dat_metaz)   mes<-dat_metaz[[1]]
+dat_metaz_base<- dat3 %>%    # names(dat_metaz)   mes<-dat_metaz[[1]]
   filter(grepl(metaz_pat, Phylum))  %>% 
   filter(percent_reads>0) %>% 
-  ### colapse data by specified taxa group and sum reads   !!!!!!!!!!
+  
+  ## recalculate percent per sample for metazoans only
+  group_by(primer, sample_num, core, ybp) %>% 
+  mutate(sum_metaz_reads = sum(percent_reads)) %>% 
+  ungroup() %>% 
+  mutate(percent_reads = (percent_reads/sum_metaz_reads)*100   ) %>% 
+  
+  ### colapse data by specified taxa group ---- now Order --- and sum percent reads   !!!!!!!!!!
   select(-Species, -Genus, -Family, -lineage) %>%   # remove taxa groups and primer related IDs to collapse
   group_by_at(vars(Superkingdom:direction.loc)) %>% 
   summarize( percent_reads = sum(percent_reads)) %>% 
   ungroup() %>% 
-  ### colapse data get mean among primers   !!!!!!!!!!
+  
+  ### colapse data for primer pairs, get mean per sample  !!!!!!!!!!
   select(-primer_taxassign_id,-primer,-minboot,-sample_id_u) %>%   # remove taxa groups and primer related IDs to collapse
   group_by_at(vars(Superkingdom:direction.loc)) %>% 
-  summarize( percent_reads = mean(percent_reads)) %>% 
-  ungroup %>% 
+  summarize( percent_reads = mean(percent_reads)  ) %>% 
+  ungroup() %>% 
+  
+  ## get sum percent per sample   - see explanation above for why not use 
+  #group_by_at(vars(sample_num:direction.loc)) %>% 
+  #mutate(sum_percent_per_sample= sum(percent_reads_first))  %>% 
+  ## calculate new and good percent per sample
+  #mutate( percent_reads = (percent_reads/sum_percent_per_sample) *100  ) %>% 
+  #ungroup() %>%   # hist(dat_metaz$percent_reads)
+  
     # make new lineage
-  unite("lineage", Superkingdom:Order, sep = ";", remove = TRUE) %>% 
+  unite("lineage", Superkingdom:Order, sep = ";", remove = TRUE)
+  
+  ####################################
+## added so can use for other catagories
+  dat_metaz <- dat_metaz_base %>%
   # split by habitat
   split(.$habitat)
-  
+
+
+## but into one list both lists
 dat_both<-list(dat_euk=dat_euk,dat_metaz=dat_metaz) %>%   # names(dat_both)
  flatten() %>% 
   set_names("mangrove - eukaryotes","seagrass - eukaryotes","mangrove - metazoans","seagrass - metazoans")
@@ -361,25 +424,48 @@ dat_both<-list(dat_euk=dat_euk,dat_metaz=dat_metaz) %>%   # names(dat_both)
 ```
 
 
-## cluster all data
- TO DO if needed
-```{r cluster}
-# K-means clustering
-clust <- kmeans(mds, 3)$cluster %>%
-  as.factor()
-mds <- mds %>%
-  mutate(groups = clust)
+## by location 
+set not to run!!!!!!!!!!! run manually
+```{r by_loc, eval=FALSE, include=FALSE}
+
+ ##   if want only eukaryotes  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+dat_both<- dat_euk
+
+
+## both habitats 
+  dat_both<- dat_euk_base %>% 
+    # split by catagory, will run separate mds for each   names(dat_euk_base)
+    split(list(.$habitat, .$direction.loc) ) %>% 
+  set_names("mangrove - north","seagrass - north","mangrove - south","seagrass - south") 
+
+##  just seagrass
+  dat_both<- dat_euk_base %>% 
+    filter(habitat=="seagrass") %>% 
+    # split by catagory, will run separate mds for each   names(dat_euk_base)
+    split(.$direction.loc ) %>% 
+  set_names("seagrass - north","seagrass - south") 
+  
+## used by habita and location combination - 5 PLOTS  levels(dat_euk_base$direction.loc_hab)
+  ##     run lines arond 505 too   !!!!!!!!!!!!!!!!!!!!!!
+ dat_both<- dat_euk_base %>% 
+    split(.$direction.loc_hab )
+ 
+
+   
 ```
 
-## MDS age tidy
+
+
+
+## MDS run
 
 ```{r MDS}
-#####       begin getting distacne matrix
+#####       begin getting distance matrix
 # set functoin  !!!!!!!!!
-   fn<-18 ## first column of taxa - check dat4 lines then related mes
+   fn<-15 ## first column of taxa - check dat4 lines then related mes
 
 # split or nest by read_transf_type  then spread then dist matrix.
-dat4<-dat_both %>%    #  mes<-dat4[[3]]   names(mes[,1:20])
+dat4<-dat_both %>%    #  mes<-dat4[[1]]   names(mes[,1:20])
   purrr::map(~ .x %>%  spread(key=lineage, value=percent_reads,  fill=0)) 
 ## this next step takes a while, limit data ???
 dat5<-dat4 %>% ## need second to get row names, improve later 
@@ -415,8 +501,15 @@ MDS_xy2 <- MDS_xy1 %>%
     #unite("plot_cat", habitat, taxa_cat, sep = " - ", remove = FALSE) %>% 
    # organize columns
    mutate(group=estimated_year_surf_cat) %>%  # add for consistancy and ease !!!!!!!!!!!!!!!!!
-   select(group, core, estimated_year,estimated_year_cat,estimated_year_surf_cat,plot_cat, everything())
+   select(group, core, estimated_year,estimated_year_cat,estimated_year_surf_cat,direction.loc_hab,plot_cat, everything())
  
+ ## need for hab-location catagories -- messy, not sure what todo
+#         MDS_xy2 <- MDS_xy2 %>%  
+               mutate(plot_cat=factor(plot_cat, levels=c("seagrass_North", "seagrass_Central","seagrass_South", 
+                          "mangrove_restored", "mangrove_natural") )  )  %>% 
+               arrange(plot_cat)
+
+
  
  MDS_xy2_means<- MDS_xy2 %>% 
     select(group,plot_cat,  habitat, MDS1, MDS2)  %>% 
@@ -428,9 +521,9 @@ MDS_xy2 <- MDS_xy1 %>%
         arrange(plot_cat, group) %>% 
         select(-habitat)  %>% 
         group_by(plot_cat) %>% 
-        slice(2:n()) %>%  # remov first row
+        slice(2:n()) %>%  # remove first row of each group
         rename(x1=MDS1, y1=MDS2)
-    mes<- MDS_xy2_means %>% 
+    mes<- MDS_xy2_means %>% # calculate 2nd spot used next!!!
         arrange(plot_cat, group) %>% 
         select(-habitat)  %>% 
         group_by(plot_cat) %>% 
@@ -456,7 +549,7 @@ MDS_xy2 <- MDS_xy1 %>%
                         labels=c("1990-2016","1960-1989","1930-1959","1800-1929","1600-1799","<1600")))
  
  
-## get stress
+## get stress-to plot
 ```{r env stress}                       
                         
                         ## get stress  so we can add it to plots !!
@@ -501,7 +594,9 @@ for (i in seq_along(dat5)){
   
    spp.scrs.p<-spp.scrs_all  %>% 
       arrange(pvals) %>% 
-        top_n(-20, pvals)
+        top_n(-20, pvals)%>% 
+        filter(sp_label!="NA")
+
   
   vf_spp[[i]] <- spp.scrs.p
   vf_spp_all[[i]] <- spp.scrs_all
@@ -510,7 +605,7 @@ for (i in seq_along(dat5)){
 
  ## convert o dataframe
  vf_spp<-bind_rows(vf_spp, .id = "plot_cat")
- vf_spp_all<-bind_rows(vf_spp_all, .id = "plot_cat")
+ vf_spp_all<-bind_rows(vf_spp_all, .id = "plot_cat") 
  
  ## tidy all for interpretaion   names(vf_spp_all)
   vf_spp_all <- vf_spp_all %>% 
@@ -576,7 +671,16 @@ order_remove<-c("Lucinoida","Nuculoida","Lamiales","Alismatales")
    #mutate(group=estimated_year_cat)  %>%  # name grouping factor
   select(group, everything() ) %>% 
   # split to make original lists
-  split(.$plot_cat)
+  split(.$plot_cat) %>% 
+  
+  ## remove levels with less than 3 occurances - will end in error
+   map(function(x) {
+  x<-x %>% 
+    group_by(group) %>% 
+  filter(n() >= 3)  %>% 
+  droplevels()
+    })
+mes<-df_ell[[1]]
 
 
 for (i in seq_along(df_ell)){  
@@ -596,27 +700,62 @@ for (i in seq_along(df_ell)){
 ```
 
 
+# loc_fix_order
+!!!!!!!!!!!!!!!   don't run unless!!!!!!!!!!
+ONLY for 5 plot hab locations
+needed to add to make facet_wrap plot in write direction
+```{r crap, eval=FALSE, include=FALSE}
+###     only if needed !!!!
+vf_spp_all<- vf_spp_all %>%   # levels(MDS_xy2$plot_cat)
+     mutate(plot_cat=factor(plot_cat, levels=c("seagrass_North", "seagrass_Central","seagrass_South", "mangrove_restored", "mangrove_natural") )  )  %>% 
+  arrange(plot_cat)
+stress<- stress %>%   # levels(MDS_xy2$plot_cat)
+     mutate(plot_cat=factor(plot_cat, levels=c("seagrass_North", "seagrass_Central","seagrass_South", "mangrove_restored", "mangrove_natural") )  )  %>% 
+  arrange(plot_cat)
+
+df_ell<- df_ell %>% 
+    mutate(plot_cat=factor(plot_cat, levels=c("seagrass_North", "seagrass_Central","seagrass_South", "mangrove_restored", "mangrove_natural") )  )  %>% 
+  arrange(plot_cat)
+
+vf_spp2<- vf_spp2  %>% 
+    mutate(plot_cat=factor(plot_cat, levels=c("seagrass_North", "seagrass_Central","seagrass_South", "mangrove_restored", "mangrove_natural") )  )  %>% 
+  arrange(plot_cat)
+
+```
+
+
+
 ## plot time
 ```{r plot_time}
 #
 ccol<-(brewer.pal(6,"Reds"))[2:7]
 ccol<-rev(c('#543005','#bf812d','#c7eae5','#80cdc1','#01665e'))
 # '#543005','#8c510a','#bf812d','#dfc27d','#f6e8c3','#c7eae5','#80cdc1','#35978f','#01665e','#003c30'
-ccol<-rev(c("#D0B990","#B1876B","#92574B","#733136","#541C2D","#350D23")[c(1:6)])
+ccol<-rev(c("#D0B990","#B1876B","#92574B","#733136","#541C2D","black","#350D23")[c(1:6)])
+
+legend_loc<-"miss_6th" # "bottomleft"   "topright3rd_plot"  topright1st_plot    miss_6th
+
+#   bottomright1st for 2 euk plots !!
+
+    
+
+
+##################
 
 # basic plot
  P_mds<- ggplot(MDS_xy2, aes(MDS1, MDS2)) + 
   geom_point(aes(color = group), size=0.7)  +
    scale_color_manual(values=ccol) +
-  facet_wrap(facets=vars(plot_cat), nrow=2, drop=TRUE, scales="free", dir="v", shrink=FALSE) 
+  facet_wrap(facets=vars(plot_cat), ncol=2, drop=TRUE, scales="free", dir="v", shrink=FALSE) 
  
   # add arrows between mean groups 
-    P_mds<- P_mds + geom_segment(MDS_xy2_arrow, mapping = aes(x=x1, xend=x2, y=y1, yend=y2), size=1.5, alpha=0.5,
+    P_mds<- P_mds + geom_segment(MDS_xy2_arrow, mapping = aes(x=x1, xend=x2, y=y1, yend=y2), size=3, alpha=0.5,
                   arrow=arrow(angle = 35, length=unit(0.4,"cm"), type="open", ends = "first"))  +
  # add means
-  geom_point(MDS_xy2_means, mapping = aes(MDS1, MDS2, color = group), size=3) 
+  geom_point(MDS_xy2_means, mapping = aes(MDS1, MDS2, color = group), size=4) 
 
   # fix theme  need  coord_fixed()+
+    # keep names remove/add at end  , strip.text.x = element_blank()
  P_mds<- P_mds +theme_minimal() +  # minimal good  or linedraw
   theme(panel.border = element_rect(colour = "black", fill = "transparent"), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), strip.text.x = element_blank() ) 
  
@@ -634,14 +773,28 @@ ccol<-rev(c("#D0B990","#B1876B","#92574B","#733136","#541C2D","#350D23")[c(1:6)]
     P_mds<- P_mds + geom_segment(MDS_xy2_arrow, mapping = aes(x=x1, xend=x2, y=y1, yend=y2), size=1.5, alpha=0.9, color = "grey95",
                   arrow=arrow(angle = 35, length=unit(0.4,"cm"), type="open", ends = "first")) 
     
-     
-## fix legend label
+     if (legend_loc=="bottomleft"){
+       ## fix legend label
   P_mds<- P_mds + labs(color = "Estimated year") +
     theme(legend.position = c(0, 0), 
       legend.justification = c(0, 0.03), legend.direction="vertical")
-
+  
+     } else if (legend_loc=="miss_6th") {
+## fix legend label
+  P_mds<- P_mds + labs(color = "Estimated year") +
+    theme(legend.position = c(.62, .11), 
+      legend.justification = c(0, 0.03), legend.direction="vertical")  
+    #P_mds<- P_mds + guides(color=guide_legend(ncol=3))
+     }  else if (legend_loc=="bottomright1st") {
+## fix legend label
+  P_mds<- P_mds + labs(color = "Estimated year") +
+    theme(legend.position = c(.05, .55), 
+      legend.justification = c(0, 0.03), legend.direction="vertical") 
+  }  
+    
+     
 ## add arrows with species
-  P_mds_species<-  P_mds + geom_segment(data = vf_spp2,
+P_mds_species    <-  P_mds + geom_segment(data = vf_spp2,
                aes(x = 0, xend = NMDS1, y = 0, yend = NMDS2),
                arrow = arrow(length = unit(0.15, "cm")), color = "grey30", lwd=0.4) +
   ggrepel::geom_text_repel(data = vf_spp2, aes(x = NMDS1, y = NMDS2, label = sp_label,
@@ -649,25 +802,305 @@ ccol<-rev(c("#D0B990","#B1876B","#92574B","#733136","#541C2D","#350D23")[c(1:6)]
              cex = 3, direction = "both", segment.size = 0.25, segment.color= "grey60")
   
      
-
+#  euk1_plot<-P_mds_species 
   
 ```
 
-## export_data
-```{r save_data}
 
-ggsave(P_mds, file=paste(dir,plot_file,"/MDS/mds_habs_time_4plot.pdf",sep=""), width = 25, height = 25, units = "cm", dpi="print")
+## export
+```{r save_data, eval=FALSE, include=FALSE}
+#    2 plot habitats, euks
+#    ggsave(euk1_plot, file=paste(dir,plot_file,"/MDS/mds_habs_euka_plot2.pdf",sep=""), width = 20, height = 35, units = "cm", dpi="print")
 
-ggsave(P_mds_species, file=paste(dir,plot_file,"/MDS/mds_habs_time_speciesarrows_4plot.pdf",sep=""), width = 25, height = 25, units = "cm", dpi="print")
+#    4 plot habitats, euks, metazoans
+#    ggsave(P_mds_species, file=paste(dir,plot_file,"/MDS/mds_habs_time_speciesarrows_4plot2.pdf",sep=""), width = 25, height = 25, units = "cm", dpi="print")
 
-data.table::fwrite(edna_slice,paste(dir,export_file,export_name,sep=""),row.names=F, sep=",")
+# for location
+#    ggsave(P_mds_species, file=paste(dir,plot_file,"/MDS/mds_location_time_5_plot.pdf",sep=""), width = 30, height = 45, units = "cm", dpi="print")
+
+
+## export env fit data
+#    data.table::fwrite(vf_spp_all,paste(dir,export_file,"env_fit_hab_loc_5plot.csv",sep=""),row.names=F, sep=",")
+
+#data.table::fwrite(edna_slice,paste(dir,export_file,export_name,sep=""),row.names=F, sep=",")
+
+```
+
+## tidy habitat with time
+```{r tidy_hab_time}
+
+
+  ## need for hab 2 plots with different location means -- messy, not sure what todo - put if else???
+         MDS_xy2 <- MDS_xy2 %>%   # names(MDS_xy2)
+                unite("in_plot_cat", direction.loc_hab, estimated_year_surf_cat, sep="_", remove=FALSE)
+
+ MDS_xy2_means<- MDS_xy2 %>% 
+    select(group,direction.loc_hab,in_plot_cat,  habitat, MDS1, MDS2)  %>% 
+    group_by(group,in_plot_cat, habitat, direction.loc_hab) %>% 
+    summarize(MDS1=mean(MDS1),MDS2=mean(MDS2), count=n()) %>% 
+     arrange(in_plot_cat, desc(group))
+ 
+ ##   get arrow data   names(MDS_xy2_means)
+  MDS_xy2_arrow<- MDS_xy2_means %>% 
+        ungroup() %>% 
+        arrange(in_plot_cat, habitat ) %>% 
+        select(-group, -in_plot_cat) %>% 
+        group_by(direction.loc_hab) %>% 
+        slice(2:n()) %>%  # remov first row
+        rename(x1=MDS1, y1=MDS2)
+
+  mes<- MDS_xy2_means %>% # calculate 2nd spot used next!!!
+       ungroup() %>% 
+        arrange(in_plot_cat, habitat ) %>% 
+        select(-group, -in_plot_cat) %>% 
+        group_by(direction.loc_hab) %>% 
+        slice(1:(n()-1))  # remov last row
+    ## put together
+    MDS_xy2_arrow$x2<-mes$MDS1
+    MDS_xy2_arrow$y2<-mes$MDS2
+    
+      MDS_xy2_arrow <- MDS_xy2_arrow %>% 
+        arrange(direction.loc_hab, habitat)
+
+      
+## redo elipse so different for locations      
+ df_ell <- MDS_xy2 %>%    # names(MDS_xy2)
+   #mutate(group=estimated_year_cat)  %>%  # name grouping factor
+  select(group, everything() ) %>% 
+  # split to make original lists
+  split(.$in_plot_cat) %>% 
+  
+  ## remove levels with less than 3 occurances - will end in error
+   map(function(x) {
+  x<-x %>% 
+    group_by(group) %>% 
+  filter(n() >= 3)  %>% 
+  droplevels()
+    })
+mes<-df_ell[[1]]
+
+
+for (i in seq_along(df_ell)){  
+    x<-data.frame()
+  for(g in levels(df_ell[[i]]$group)){
+    x <- rbind(x, cbind(as.data.frame(with(df_ell[[i]][df_ell[[i]]$group==g,],
+                    veganCovEllipse(cov.wt(cbind(MDS1,MDS2),wt=rep(1/length(MDS1),                                              length(MDS1)))$cov,center=c(mean(MDS1),mean(MDS2)))))
+                    ,group=g))
+  }
+    df_ell[[i]]<-x
+  
+}
+
+## convert o dataframe        unique(df_ell$group)
+ df_ell<-bind_rows(df_ell, .id = "in_plot_cat") %>% 
+   mutate(group=factor(group, levels=c( "<1500","1500-1799","1800-1959", "1960-1989", "1990-2015","2016" ) ))
+
+```
+
+##hab plot with differnt loc
+```{r hab_plot_loc}
+ccol<-rev(c("#D0B990","#B1876B","#92574B","#733136","#541C2D","black","#350D23")[c(1:6)])
+arr_col<-
+
+
+legend_loc<-"miss_6th" # "bottomleft"   "topright3rd_plot"  topright1st_plot miss_6th
+
+
+###########################################################################################################################
+
+# mangrove     names(MDS_xy2)
+ MDS_xy3 <- MDS_xy2 %>% 
+        filter(habitat=="mangrove")
+MDS_xy3_means <- MDS_xy2_means %>% 
+        filter(habitat=="mangrove")
+arr1<-MDS_xy2_arrow %>% #  unique(MDS_xy2_arrow$direction.loc_hab)
+    filter(direction.loc_hab=="mangrove_natural")
+arr2<-MDS_xy2_arrow %>% #  unique(MDS_xy2_arrow$direction.loc_hab)
+    filter(direction.loc_hab=="mangrove_restored")
+df_ell2<- df_ell  %>% 
+  separate(in_plot_cat,into=c("habitat","cat","year") , sep="_", remove=FALSE) %>%
+  filter(habitat=="mangrove" & cat == "restored")
+df_ell3<- df_ell  %>% 
+  separate(in_plot_cat,into=c("habitat","cat","year") , sep="_", remove=FALSE) %>% 
+  filter(habitat=="mangrove" & cat == "natural")
+vf_spp2_2<- vf_spp2 %>% 
+    filter(plot_cat=="mangrove")
+vf_spp2_3<- vf_spp2 %>% 
+    filter(plot_cat=="seagrass")
+
+##  start plt
+ P_mds  <- ggplot(MDS_xy3, aes(MDS1, MDS2)) + 
+  geom_point(aes(color = estimated_year_surf_cat, shape=direction.loc_hab), size=0.9)  +
+   scale_color_manual(values=ccol) +
+  # add means
+  geom_point(MDS_xy3_means, mapping = aes(MDS1, MDS2, color = group, shape=direction.loc_hab), size=5) 
+
+  # fix theme  need  coord_fixed()+
+    # keep names remove/add at end  , strip.text.x = element_blank()
+ P_mds<- P_mds +theme_minimal() +  # minimal good  or linedraw
+  theme(panel.border = element_rect(colour = "black", fill = "transparent"), panel.grid.major = element_blank(), panel.grid.minor = element_blank() ) 
+ 
+ # add letter labels and stress
+ P_mds<- P_mds + geom_text( data = stress[1,], mapping = aes(x = -Inf, y = Inf, label = "c"),
+  hjust   = -0.9, vjust = 1.6) +
+          geom_text( data = stress[1,], mapping = aes(x = Inf, y = -Inf, label = sprintf("%0.2f", round(stress_num, digits = 3)) ),
+  hjust   = 1.4, vjust = -1.3 , size=3)  
+  
+## add elipses
+#    P_mds <-  P_mds + 
+#    geom_polygon(data=df_ell2, aes(x=MDS1, y=MDS2, fill=group), alpha=0.40, size=0, show.legend=FALSE)+scale_fill_manual(values=ccol) + 
+#    geom_polygon(data=df_ell3, aes(x=MDS1, y=MDS2, fill=group), alpha=0.40, size=0, show.legend=FALSE) +scale_fill_manual(values=ccol) 
+ 
+  # add arrows between mean groups 
+    P_mds<- P_mds + geom_segment(arr2, mapping = aes(x=x1, xend=x2, y=y1, yend=y2), size=3, alpha=0.8, color="grey20",
+                  arrow=arrow(angle = 35, length=unit(0.4,"cm"), type="open", ends = "first")) +
+          geom_segment(arr1, mapping = aes(x=x1, xend=x2, y=y1, yend=y2), size=3, alpha=0.8, color="grey70",
+                  arrow=arrow(angle = 35, length=unit(0.4,"cm"), type="open", ends = "first"))  
+            
+## fix legend label
+  P_mds<- P_mds + labs(color = "Estimated year", shape = " ") +
+    theme(legend.position = c(.01, -0.0), legend.margin = margin(0.1,0,0,0, unit="cm"),legend.spacing.y = unit(-0.0, "cm"),
+      legend.justification = c(0, 0.00), legend.direction="vertical" ) 
+          #
+
+## add arrows with species
+P_mds_species    <-  P_mds + geom_segment(data = vf_spp2_2,
+               aes(x = 0, xend = NMDS1, y = 0, yend = NMDS2),
+               arrow = arrow(length = unit(0.15, "cm")), color = "grey30", lwd=0.4) +
+  ggrepel::geom_text_repel(data = vf_spp2_2, aes(x = NMDS1, y = NMDS2, label = sp_label,
+                          fontface = font_type), color= vf_spp2_2$word_color,
+             cex = 3, direction = "both", segment.size = 0.25, segment.color= "grey60")
+  
+P_mds_mang  <- P_mds_species
+###########################################################################################################################
+
+# seagrass     names(MDS_xy2)
+ MDS_xy3 <- MDS_xy2 %>% 
+        filter(habitat=="seagrass")
+MDS_xy3_means <- MDS_xy2_means %>% 
+        filter(habitat=="seagrass")
+arr1<-MDS_xy2_arrow %>% #  unique(MDS_xy2_arrow$direction.loc_hab)
+    filter(direction.loc_hab=="seagrass_North")
+arr2<-MDS_xy2_arrow %>% #  unique(MDS_xy2_arrow$direction.loc_hab)
+    filter(direction.loc_hab=="seagrass_Central")
+arr3<-MDS_xy2_arrow %>% #  unique(MDS_xy2_arrow$direction.loc_hab)
+    filter(direction.loc_hab=="seagrass_South")
+df_ell2<- df_ell  %>% 
+  separate(in_plot_cat,into=c("habitat","cat","year") , sep="_", remove=FALSE) %>%
+  filter(habitat=="seagrass" & cat == "North")
+df_ell3<- df_ell  %>% 
+  separate(in_plot_cat,into=c("habitat","cat","year") , sep="_", remove=FALSE) %>% 
+  filter(habitat=="seagrass" & cat == "Central")
+df_ell4<- df_ell  %>% 
+  separate(in_plot_cat,into=c("habitat","cat","year") , sep="_", remove=FALSE) %>% 
+  filter(habitat=="seagrass" & cat == "South")
+vf_spp2_2<- vf_spp2 %>% 
+    filter(plot_cat=="seagrass")
+
+##  start plot
+ P_mds  <- ggplot(MDS_xy3, aes(MDS1, MDS2)) + 
+  geom_point(aes(color = estimated_year_surf_cat, shape=direction.loc_hab), size=0.9)  +
+   scale_color_manual(values=ccol) +
+  # add means
+  geom_point(MDS_xy3_means, mapping = aes(MDS1, MDS2, color = group, shape=direction.loc_hab), size=5) 
+
+  # fix theme  need  coord_fixed()+
+    # keep names remove/add at end  , strip.text.x = element_blank()
+ P_mds<- P_mds +theme_minimal() +  # minimal good  or linedraw
+  theme(panel.border = element_rect(colour = "black", fill = "transparent"), panel.grid.major = element_blank(), panel.grid.minor = element_blank() ) 
+ 
+ # add letter labels and stress
+ P_mds<- P_mds + geom_text( data = stress[2,], mapping = aes(x = -Inf, y = Inf, label = "d"),
+  hjust   = -0.9, vjust = 1.6) +
+          geom_text( data = stress[2,], mapping = aes(x = Inf, y = -Inf, label = sprintf("%0.2f", round(stress_num, digits = 3)) ),
+  hjust   = 1.4, vjust = -1.3 , size=3)  
+  
+## add elipses
+#    P_mds <-  P_mds + 
+#    geom_polygon(data=df_ell2, aes(x=MDS1, y=MDS2, fill=group), alpha=0.40, size=0, show.legend=FALSE) +
+#    scale_fill_manual(values=ccol) + 
+#    geom_polygon(data=df_ell3, aes(x=MDS1, y=MDS2, fill=group), alpha=0.40, size=0, show.legend=FALSE) +
+#    scale_fill_manual(values=ccol) + 
+#    geom_polygon(data=df_ell4, aes(x=MDS1, y=MDS2, fill=group), alpha=0.40, size=0, show.legend=FALSE) +
+#    scale_fill_manual(values=ccol) 
+ 
+  # add arrows between mean groups 
+    P_mds<- P_mds + geom_segment(arr3, mapping = aes(x=x1, xend=x2, y=y1, yend=y2), size=3, alpha=0.8, color="grey20",
+                  arrow=arrow(angle = 35, length=unit(0.4,"cm"), type="open", ends = "first")) +
+           geom_segment(arr2, mapping = aes(x=x1, xend=x2, y=y1, yend=y2), size=3, alpha=0.8, color="grey45",
+                  arrow=arrow(angle = 35, length=unit(0.4,"cm"), type="open", ends = "first"))+
+             geom_segment(arr1, mapping = aes(x=x1, xend=x2, y=y1, yend=y2), size=3, alpha=0.8, color="grey70",
+                  arrow=arrow(angle = 35, length=unit(0.4,"cm"), type="open", ends = "first"))  
+           
+            
+## fix legend label
+  P_mds<- P_mds + labs(color = "Estimated year", shape = " ") +
+    theme(legend.position = c(.65, .75), 
+      legend.justification = c(0, 0.03), legend.direction="vertical") +
+      guides(color=FALSE)
+
+## add arrows with species
+P_mds_species    <-  P_mds + geom_segment(data = vf_spp2_2,
+               aes(x = 0, xend = NMDS1, y = 0, yend = NMDS2),
+               arrow = arrow(length = unit(0.15, "cm")), color = "grey30", lwd=0.4) +
+  ggrepel::geom_text_repel(data = vf_spp2_2, aes(x = NMDS1, y = NMDS2, label = sp_label,
+                          fontface = font_type), color= vf_spp2_2$word_color,
+             cex = 3, direction = "both", segment.size = 0.25, segment.color= "grey60")
+   
+
+P_mds_sea<- P_mds_species
+
+
+## put together
+
+fantastic<- ggpubr::ggarrange(P_mds_mang, P_mds_sea, ncol = 1, nrow = 2, common.legend=FALSE)
+
+fantastic<- gridExtra::arrangeGrob(P_mds_mang, P_mds_sea, ncol = 1)
+
+#  ggsave(fantastic, file=paste(dir,plot_file,"/MDS/mds_2habpplots_location_time.pdf",sep=""), width = 15, height = 25, units = "cm", dpi="print")
 
 ```
 
 
-## scatter-OLD
+## combine plots
+```{r comb_p}
+
+fantastic<- ggpubr::ggarrange(P_mds_mang + theme(legend.position = c(.05, .05), 
+       legend.direction="vertical", plot.margin=unit(c(0.2,0.2,0.3,0.2), "cm")  ) 
+        +labs(x=NULL, y=NULL)  + guides(color=FALSE)
+                              , P_mds_sea+ theme( plot.margin=unit(c(-0.1,0.2,0.2,0.2), "cm")  ) +labs( y=NULL), ncol = 1, nrow = 2, common.legend=FALSE)
+# t = 0, r = 0, b = 0, l = 0
+
+
+fantastic<- ggpubr::ggarrange(euk1_plot+ theme(legend.position = c(0.0, 0.515) ) , fantastic, ncol = 2, nrow = 1, common.legend=FALSE)
+
+  ggsave(fantastic, file=paste(dir,plot_file,"/MDS/mds_4_hab_euk_location_time.pdf",sep=""), width = 25, height = 25, units = "cm", dpi="print")
+
+```
+
+
+
+
+
+
+
+## OLD demarcation
+## cluster all data
+used to get cluster with specific number of groups
+ TO DO if needed?????  but not yet implemented
+```{r cluster, eval=FALSE, include=FALSE}
+# K-means clustering
+clust <- kmeans(mds, 3)$cluster %>%
+  as.factor()
+mds <- mds %>%
+  mutate(groups = clust)
+```
+
+
+
+## scatter-OLD -- DELETE
 used initially, but then switched to base ggplot
-```{r OLD}
+```{r OLD, eval=FALSE, include=FALSE}
 
 #####################################################################################
 ## using scatter  ###########################################################
